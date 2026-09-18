@@ -10,7 +10,6 @@ import {IWETH} from "@uniswap/v2-periphery/contracts/interfaces/IWETH.sol";
 
 interface TestVm {
     function setEnv(string calldata name, string calldata value) external;
-    function toString(address value) external pure returns (string memory);
     function deal(address account, uint256 balance) external;
     function assume(bool condition) external;
     function prank(address sender) external;
@@ -27,9 +26,9 @@ contract DexTest is Deploy {
 
     function setUp() public {
         token = IERC20(_deploy(abi.encodePacked(vm.getCode("build/core/ERC20.sol/ERC20.json"), abi.encode(1e27))));
-        weth = IWETH(_deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json")));
-        testVm.setEnv("WBNB", testVm.toString(address(weth)));
+        testVm.setEnv("DEPLOY_TEST_WBNB", "true");
         (factory, router) = run();
+        weth = IWETH(router.WETH());
         pair = IUniswapV2Pair(factory.createPair(address(token), address(weth)));
         testVm.deal(address(this), 100 ether);
         weth.deposit{value: 100 ether}();
