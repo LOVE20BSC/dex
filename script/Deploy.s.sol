@@ -6,9 +6,13 @@ import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUn
 
 interface Vm {
     function envAddress(string calldata name) external view returns (address);
+    function envOr(string calldata name, bool defaultValue) external view returns (bool);
+    function envOr(string calldata name, string calldata defaultValue) external view returns (string memory);
     function getCode(string calldata artifactPath) external view returns (bytes memory);
     function startBroadcast() external;
     function stopBroadcast() external;
+    function toString(address value) external pure returns (string memory);
+    function writeFile(string calldata path, string calldata data) external;
 }
 
 contract Deploy {
@@ -34,6 +38,21 @@ contract Deploy {
 
         require(factory.feeTo() == address(0) && factory.feeToSetter() == address(0), "Protocol fee is not locked");
         require(router.factory() == address(factory) && router.WETH() == wbnb, "Router configuration mismatch");
+
+        if (vm.envOr("WRITE_ADDRESS_FILE", false)) {
+            string memory network = vm.envOr("network", string("anvil31337_dev"));
+            string memory path = string.concat("script/network/", network, "/address.params");
+            vm.writeFile(
+                path,
+                string.concat(
+                    "FACTORY_ADDRESS=",
+                    vm.toString(address(factory)),
+                    "\nROUTER_ADDRESS=",
+                    vm.toString(address(router)),
+                    "\n"
+                )
+            );
+        }
     }
 
     function _deploy(bytes memory code) internal returns (address deployed) {

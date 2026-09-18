@@ -1,0 +1,4 @@
+CHAIN_ID=31337
+RPC_URL=http://127.0.0.1:8545
+# Use the WETH9 test contract address when deploying against a local Anvil node.
+WBNB_ADDRESS=0x0000000000000000000000000000000000000001

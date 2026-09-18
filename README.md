@@ -76,18 +76,26 @@ Pair 创建字节码的哈希必须为原版 Router 内置的值：
 
 ## 部署
 
-设置目标链 `RPC_URL` 和已有 `WBNB` 合约地址，使用已配置的 Foundry 账户。先完成测试，再模拟部署：
+部署流程仿照 LOVE20TKM `group/script/deploy`：网络参数在 `script/network/<network>/`，网络名采用“链名+链 ID+用途”（例如 `bsc97_dev`），账户文件只在本地保存，脚本依次完成初始化、部署和链上检查。
 
 ```bash
-make test
-export WBNB="目标链的 WBNB 合约地址"
-export RPC_URL="目标链的 RPC 地址"
-forge script script/Deploy.s.sol:Deploy --rpc-url "$RPC_URL" --account deployer
+cp script/network/bsc97_dev/.account.example script/network/bsc97_dev/.account
+# 填写 .account 的 keystore 账户和发送地址，并在 network.params 填写 WBNB_ADDRESS
+make build
+source script/deploy/00_init.sh bsc97_dev
+source script/deploy/01_deploy.sh
+source script/deploy/99_check.sh
 ```
 
-确认模拟结果后，在同一条命令末尾加 `--broadcast` 才会提交链上交易。
-脚本创建 Factory 和 Router02，返回两者地址，并检查 `feeTo`、`feeToSetter` 均为零及 Router 的关联地址正确。
-这两次创建是独立交易；若后一次提交失败，可按 Foundry 的广播记录恢复。
+或一键执行：
+
+```bash
+script/deploy/one_click_deploy.sh bsc97_dev
+```
+
+macOS 会通过密码输入框读取 keystore 密码；`anvil31337_dev` 可在 `.account` 中填写 `PRIVATE_KEY`，不保存密码。部署脚本将地址写入被忽略的 `script/network/<network>/address.params`，不会写入三个 submodule。
+
+脚本创建 Factory 和 Router02，检查 `feeTo`、`feeToSetter` 均为零及 Router 的关联地址正确。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。
 
 LOVE20 的 Launch 与 Stake 应配置同一个 Factory；Stake 的 Router 配置为这里部署的 Router02。
 Stake 添加/移除流动性直接调用 Pair，手续费换币调用 Router 的 `getAmountsOut` 和 `swapExactTokensForTokens`。

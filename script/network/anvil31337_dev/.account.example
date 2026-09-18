@@ -1,0 +1,3 @@
+# Copy to .account and fill in the Anvil deployer key.
+PRIVATE_KEY=
+ACCOUNT_ADDRESS=

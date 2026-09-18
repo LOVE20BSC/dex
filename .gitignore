@@ -4,3 +4,5 @@
 /broadcast/
 .env
 .DS_Store
+/script/network/*/.account
+/script/network/*/address.params
