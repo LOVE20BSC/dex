@@ -18,6 +18,7 @@ fs_permissions = [
 
 # These profiles run from the respective submodule root to preserve upstream source paths.
 [profile.core]
+# Match Uniswap v2-core/.waffle.json: solc 0.5.16, Istanbul, optimizer runs 999999.
 src = "contracts"
 test = "unused"
 script = "unused"
@@ -26,9 +27,14 @@ remappings = []
 out = "../../build/core"
 cache_path = "../../cache/core"
 solc_version = "0.5.16"
+evm_version = "istanbul"
+optimizer = true
 optimizer_runs = 999999
+bytecode_hash = "ipfs"
+cbor_metadata = true
 
 [profile.periphery]
+# Match Uniswap v2-periphery/.waffle.json: solc 0.6.6, Istanbul, optimizer runs 999999.
 src = "contracts"
 test = "unused"
 script = "unused"
@@ -40,4 +46,8 @@ remappings = [
 out = "../../build/periphery"
 cache_path = "../../cache/periphery"
 solc_version = "0.6.6"
+evm_version = "istanbul"
+optimizer = true
 optimizer_runs = 999999
+bytecode_hash = "ipfs"
+cbor_metadata = true

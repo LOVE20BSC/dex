@@ -9,7 +9,7 @@
 | --- | --- | --- |
 | `lib/v2-core` | [Uniswap/v2-core · 4dd59067c76dea4a0e8e4bfdda41877a6b16dedc](https://github.com/Uniswap/v2-core/tree/4dd59067c76dea4a0e8e4bfdda41877a6b16dedc)（v1.0.1） | Factory、Pair、LP ERC20 及依赖 |
 | `lib/v2-periphery` | [Uniswap/v2-periphery · ed24991304291297c3b4a52818d02f46a17aa9a2](https://github.com/Uniswap/v2-periphery/tree/ed24991304291297c3b4a52818d02f46a17aa9a2) | Router02 及依赖 |
-| `lib/solidity-lib` | [Uniswap/solidity-lib · c01640b0f0f1d8a85cba8de378cc48469fcfd9a6](https://github.com/Uniswap/solidity-lib/tree/c01640b0f0f1d8a85cba8de378cc48469fcfd9a6) | TransferHelper |
+| `lib/solidity-lib` | [Uniswap/solidity-lib · 2e31d2c594caf01f16041cd73d8701c43b87cc16](https://github.com/Uniswap/solidity-lib/tree/2e31d2c594caf01f16041cd73d8701c43b87cc16)（v1.1.1） | TransferHelper |
 
 这是组合多个上游仓库的独立衍生项目，不代表 Uniswap 官方部署。
 原始名称、源码、许可证和提交历史完整保留；子模块中的 Router01 实现、V1 迁移器和示例不参与本项目构建。
@@ -68,6 +68,8 @@ Pair 创建字节码的哈希必须为原版 Router 内置的值：
 
 部署脚本在部署前核验此哈希；测试还验证 Factory 实际创建的 Pair 地址与之吻合。
 所以不要改变 core 的源码路径、编译器或编译设置，也不要用普通 `forge build` 生成的其他产物替代 `build/core/`。
+
+core 和 periphery 的两个 Foundry profile 明确复刻各自上游 `.waffle.json`：编译器分别为 0.5.16 和 0.6.6，EVM 为 Istanbul，优化器 runs 为 999999，metadata 使用 IPFS。Factory、Pair 的创建码和运行码与官方发布包逐字节一致；Router 的可执行码也一致，metadata 仅因本地 submodule remapping 路径不同而不同。
 
 测试直接运行同一份部署脚本，覆盖永久放弃管理权（256 组随机地址）、建池与地址计算、0.30% 报价、兑换、添加/移除流动性不增发协议费 LP，以及失败兑换的资金回滚。
 上游 ERC20、WETH9 仅用作本地测试资产；正式部署复用目标链已有的 WBNB。
