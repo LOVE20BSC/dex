@@ -95,6 +95,8 @@ script/deploy/one_click_deploy.sh bsc97_dev
 
 所有网络统一使用 Foundry keystore，macOS 会通过密码输入框读取密码。`anvil31337_dev` 会自动从上游 WETH9 构建产物部署一个本地包装币，并在本次部署中把它作为 `TestWBNB` 使用；它的链上合约名称仍是上游 WETH9 的 `Wrapped Ether`。部署脚本将地址写入被忽略的 `script/network/<network>/address.params`，不会写入三个 submodule。
 
+`00_init.sh` 会先读取 RPC 实际 Chain ID，并要求它等于 `network.params` 中的 `CHAIN_ID`；`anvil31337_dev` 因为启用 `DEPLOY_TEST_WBNB=true`，不需要填写 `WBNB_ADDRESS`。
+
 脚本创建 Factory 和 Router02，检查 `feeTo`、`feeToSetter` 均为零及 Router 的关联地址正确。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。
 
 LOVE20 的 Launch 与 Stake 应配置同一个 Factory；Stake 的 Router 配置为这里部署的 Router02。
