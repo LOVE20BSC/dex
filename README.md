@@ -52,13 +52,15 @@ git submodule update --init --recursive
 make test
 ```
 
+普通 `forge build` 只做编译，不自动输出脚本/测试 lint；需要审查这些代码时单独运行 `forge lint`。
+
 `make build` 分别在子模块根目录编译，保留上游的 `contracts/...` 源文件路径：
 
 | 构建 | Solidity | EVM | 优化器 runs | 产物 |
 | --- | --- | --- | --- | --- |
 | Factory / Pair | 0.5.16 | istanbul | 999999 | `build/core/` |
 | Router02 | 0.6.6 | istanbul | 999999 | `build/periphery/` |
-| 部署脚本 / 测试 | 0.8.37 | istanbul | 200 | `out/` |
+| 部署脚本 / 测试 | 0.8.37 | osaka | 200 | `out/` |
 
 Pair 创建字节码的哈希必须为原版 Router 内置的值：
 

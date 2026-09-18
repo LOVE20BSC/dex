@@ -3,7 +3,7 @@ src = "script"
 test = "test"
 script = "script"
 solc_version = "0.8.37"
-evm_version = "istanbul"
+evm_version = "osaka"
 optimizer = true
 optimizer_runs = 200
 auto_detect_remappings = false
@@ -15,6 +15,10 @@ fs_permissions = [
   { access = "read", path = "./build" },
   { access = "read-write", path = "./script/network" },
 ]
+
+[lint]
+# Keep `forge build` focused on compilation; run `forge lint` explicitly when reviewing scripts/tests.
+lint_on_build = false
 
 # These profiles run from the respective submodule root to preserve upstream source paths.
 [profile.core]
