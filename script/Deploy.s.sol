@@ -20,7 +20,9 @@ contract Deploy {
     bytes32 internal constant PAIR_INIT_CODE_HASH = 0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
 
     function run() public returns (IUniswapV2Factory factory, IUniswapV2Router02 router) {
-        address wbnb = vm.envAddress("WBNB");
+        address wbnb = vm.envOr("DEPLOY_TEST_WBNB", false)
+            ? _deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json"))
+            : vm.envAddress("WBNB");
         require(wbnb.code.length != 0, "WBNB must be a deployed contract");
         require(
             keccak256(vm.getCode("build/core/UniswapV2Pair.sol/UniswapV2Pair.json")) == PAIR_INIT_CODE_HASH,
@@ -45,6 +47,9 @@ contract Deploy {
             vm.writeFile(
                 path,
                 string.concat(
+                    "WBNB_ADDRESS=",
+                    vm.toString(wbnb),
+                    "\n",
                     "FACTORY_ADDRESS=",
                     vm.toString(address(factory)),
                     "\nROUTER_ADDRESS=",

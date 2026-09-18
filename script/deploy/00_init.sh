@@ -12,40 +12,32 @@ network_dir="$SCRIPT_DIR/../network/$network"
 [ -f "$network_dir/network.params" ] || fail "Missing $network_dir/network.params"
 
 source "$network_dir/network.params"
+[ -n "$CHAIN_ID" ] || fail "CHAIN_ID is not set"
 [ -n "$RPC_URL" ] || fail "RPC_URL is not set"
-[ -n "$WBNB_ADDRESS" ] || fail "WBNB_ADDRESS is not set"
+actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL" 2>/dev/null)" || fail "Cannot read Chain ID from RPC_URL"
+[ "$actual_chain_id" = "$CHAIN_ID" ] || fail "Chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id"
+[ "${DEPLOY_TEST_WBNB:-false}" = "true" ] || [ -n "$WBNB_ADDRESS" ] || fail "WBNB_ADDRESS is not set"
 
-if [ -f "$network_dir/.account" ]; then
-    source "$network_dir/.account"
-fi
-
-if [ -n "${PRIVATE_KEY:-}" ]; then
-    : "Using PRIVATE_KEY for this development network"
-else
-    [ -n "${KEYSTORE_ACCOUNT:-}" ] || fail "KEYSTORE_ACCOUNT is not set in $network_dir/.account"
-    [ -n "${ACCOUNT_ADDRESS:-}" ] || fail "ACCOUNT_ADDRESS is not set in $network_dir/.account"
-    if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ "${KEYSTORE_PASSWORD_ACCOUNT:-}" != "$KEYSTORE_ACCOUNT" ]; then
-        unset KEYSTORE_PASSWORD KEYSTORE_PASSWORD_ACCOUNT
-        command -v osascript >/dev/null 2>&1 || fail "osascript is required for the keystore password dialog"
-        KEYSTORE_PASSWORD="$(osascript <<APPLESCRIPT
+source "$network_dir/.account" 2>/dev/null || fail "Missing $network_dir/.account"
+[ -n "${KEYSTORE_ACCOUNT:-}" ] || fail "KEYSTORE_ACCOUNT is not set in $network_dir/.account"
+[ -n "${ACCOUNT_ADDRESS:-}" ] || fail "ACCOUNT_ADDRESS is not set in $network_dir/.account"
+if [ -z "${KEYSTORE_PASSWORD:-}" ] || [ "${KEYSTORE_PASSWORD_ACCOUNT:-}" != "$KEYSTORE_ACCOUNT" ]; then
+    unset KEYSTORE_PASSWORD KEYSTORE_PASSWORD_ACCOUNT
+    command -v osascript >/dev/null 2>&1 || fail "osascript is required for the keystore password dialog"
+    KEYSTORE_PASSWORD="$(osascript <<APPLESCRIPT
 text returned of (display dialog "Enter keystore password for $KEYSTORE_ACCOUNT:" default answer "" with hidden answer buttons {"Cancel", "OK"} default button "OK")
 APPLESCRIPT
-        )" || fail "Keystore password input cancelled"
-        [ -n "$KEYSTORE_PASSWORD" ] || fail "Keystore password input cancelled"
-        export KEYSTORE_PASSWORD KEYSTORE_PASSWORD_ACCOUNT="$KEYSTORE_ACCOUNT"
-    fi
+)" || fail "Keystore password input cancelled"
+    [ -n "$KEYSTORE_PASSWORD" ] || fail "Keystore password input cancelled"
+    export KEYSTORE_PASSWORD KEYSTORE_PASSWORD_ACCOUNT="$KEYSTORE_ACCOUNT"
 fi
 
-export network network_dir DEX_ROOT WBNB="$WBNB_ADDRESS" WRITE_ADDRESS_FILE=true
+export network network_dir DEX_ROOT CHAIN_ID RPC_URL DEPLOY_TEST_WBNB WBNB="${WBNB_ADDRESS:-}" WRITE_ADDRESS_FILE=true
 
 forge_script() {
     cd "$DEX_ROOT" || return 1
-    if [ -n "${PRIVATE_KEY:-}" ]; then
-        forge script "$@" --rpc-url "$RPC_URL" --private-key "$PRIVATE_KEY" --broadcast --legacy
-    else
-        forge script "$@" --rpc-url "$RPC_URL" --account "$KEYSTORE_ACCOUNT" \
-            --sender "$ACCOUNT_ADDRESS" --password "$KEYSTORE_PASSWORD" --broadcast --legacy
-    fi
+    forge script "$@" --rpc-url "$RPC_URL" --account "$KEYSTORE_ACCOUNT" \
+        --sender "$ACCOUNT_ADDRESS" --password "$KEYSTORE_PASSWORD" --broadcast --legacy
 }
 
 cast_call() {
@@ -61,5 +53,10 @@ check_equal() {
 }
 
 echo "Selected network: $network"
+echo "Chain ID: $CHAIN_ID"
 echo "RPC_URL: $RPC_URL"
-echo "WBNB_ADDRESS: $WBNB_ADDRESS"
+if [ "${DEPLOY_TEST_WBNB:-false}" = "true" ]; then
+    echo "WBNB: deploy TestWBNB from upstream WETH9"
+else
+    echo "WBNB_ADDRESS: $WBNB_ADDRESS"
+fi

@@ -93,7 +93,7 @@ source script/deploy/99_check.sh
 script/deploy/one_click_deploy.sh bsc97_dev
 ```
 
-macOS 会通过密码输入框读取 keystore 密码；`anvil31337_dev` 可在 `.account` 中填写 `PRIVATE_KEY`，不保存密码。部署脚本将地址写入被忽略的 `script/network/<network>/address.params`，不会写入三个 submodule。
+所有网络统一使用 Foundry keystore，macOS 会通过密码输入框读取密码。`anvil31337_dev` 会自动从上游 WETH9 构建产物部署一个本地包装币，并在本次部署中把它作为 `TestWBNB` 使用；它的链上合约名称仍是上游 WETH9 的 `Wrapped Ether`。部署脚本将地址写入被忽略的 `script/network/<network>/address.params`，不会写入三个 submodule。
 
 脚本创建 Factory 和 Router02，检查 `feeTo`、`feeToSetter` 均为零及 Router 的关联地址正确。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。
 
