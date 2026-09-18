@@ -1,0 +1,40 @@
+[profile.default]
+src = "script"
+test = "test"
+script = "script"
+solc_version = "0.8.37"
+evm_version = "istanbul"
+optimizer = true
+optimizer_runs = 200
+auto_detect_remappings = false
+remappings = [
+  "@uniswap/v2-core/=lib/v2-core/",
+  "@uniswap/v2-periphery/=lib/v2-periphery/",
+]
+fs_permissions = [{ access = "read", path = "./build" }]
+
+# These profiles run from the respective submodule root to preserve upstream source paths.
+[profile.core]
+src = "contracts"
+test = "unused"
+script = "unused"
+libs = []
+remappings = []
+out = "../../build/core"
+cache_path = "../../cache/core"
+solc_version = "0.5.16"
+optimizer_runs = 999999
+
+[profile.periphery]
+src = "contracts"
+test = "unused"
+script = "unused"
+libs = []
+remappings = [
+  "@uniswap/v2-core/=../v2-core/",
+  "@uniswap/lib/=../solidity-lib/",
+]
+out = "../../build/periphery"
+cache_path = "../../cache/periphery"
+solc_version = "0.6.6"
+optimizer_runs = 999999
