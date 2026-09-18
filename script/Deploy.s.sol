@@ -20,10 +20,7 @@ contract Deploy {
     bytes32 internal constant PAIR_INIT_CODE_HASH = 0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
 
     function run() public returns (IUniswapV2Factory factory, IUniswapV2Router02 router) {
-        address wbnb = vm.envOr("DEPLOY_TEST_WBNB", false)
-            ? _deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json"))
-            : vm.envAddress("WBNB");
-        require(wbnb.code.length != 0, "WBNB must be a deployed contract");
+        bool deployTestWbnb = vm.envOr("DEPLOY_TEST_WBNB", false);
         require(
             keccak256(vm.getCode("build/core/UniswapV2Pair.sol/UniswapV2Pair.json")) == PAIR_INIT_CODE_HASH,
             "Pair bytecode does not match the upstream Router"
@@ -34,6 +31,9 @@ contract Deploy {
         bytes memory routerCode = vm.getCode("build/periphery/UniswapV2Router02.sol/UniswapV2Router02.json");
 
         vm.startBroadcast();
+        address wbnb =
+            deployTestWbnb ? _deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json")) : vm.envAddress("WBNB");
+        require(wbnb.code.length != 0, "WBNB must be a deployed contract");
         factory = IUniswapV2Factory(_deploy(factoryCode));
         router = IUniswapV2Router02(_deploy(abi.encodePacked(routerCode, abi.encode(address(factory), wbnb))));
         vm.stopBroadcast();
