@@ -80,11 +80,32 @@ core 和 periphery 的两个 Foundry profile 明确复刻各自上游 `.waffle.j
 
 ## 部署
 
-部署流程仿照 LOVE20TKM `group/script/deploy`：网络参数在 `script/network/<network>/`，网络名采用“链名+链 ID+用途”（例如 `bsc97_dev`），账户文件只在本地保存，脚本依次完成初始化、部署和链上检查。
+### 准备 Foundry Keystore
+
+部署脚本统一使用 Foundry keystore 管理私钥。首次部署前需创建 keystore 账户：
+
+```bash
+# 生成新助记词和私钥
+cast wallet new-mnemonic
+
+# 导入到 keystore（会要求输入密码）
+cast wallet import <account-name> --interactive
+# 或从私钥导入
+cast wallet import <account-name> --private-key <YOUR_PRIVATE_KEY>
+
+# 查看账户地址
+cast wallet address --account <account-name>
+```
+
+将 `<account-name>` 和对应地址填入目标网络的 `.account` 文件。部署时 macOS 会通过弹窗读取 keystore 密码。
+
+### 部署流程
+
+部署流程仿照 LOVE20TKM `group/script/deploy`：网络参数在 `script/network/<network>/`，网络名采用”链名+链 ID+用途”（例如 `bsc97_dev`），账户文件只在本地保存，脚本依次完成初始化、部署和链上检查。
 
 ```bash
 cp script/network/bsc97_dev/.account.example script/network/bsc97_dev/.account
-# 填写 .account 的 keystore 账户和发送地址，并在 network.params 填写 WBNB_ADDRESS
+# 填写 .account 的 keystore 账户和发送地址，并在 dex.params 填写 WBNB_ADDRESS
 make build
 source script/deploy/00_init.sh bsc97_dev
 source script/deploy/01_deploy.sh
@@ -97,7 +118,7 @@ source script/deploy/99_check.sh
 script/deploy/one_click_deploy.sh bsc97_dev
 ```
 
-所有网络统一使用 Foundry keystore，macOS 会通过密码输入框读取密码。`anvil31337_dev` 会自动从上游 WETH9 构建产物部署一个本地包装币，并在本次部署中把它作为 `TestWBNB` 使用；它的链上合约名称仍是上游 WETH9 的 `Wrapped Ether`。部署脚本将地址写入被忽略的 `script/network/<network>/address.params`，不会写入三个 submodule。
+`anvil31337_dev` 会自动从上游 WETH9 构建产物部署一个本地包装币，并在本次部署中把它作为 `TestWBNB` 使用；它的链上合约名称仍是上游 WETH9 的 `Wrapped Ether`。部署脚本将地址写入被 `.gitignore` 排除的 `script/network/<network>/addresses.dex.params`，不会写入三个 submodule。
 
 `00_init.sh` 会先读取 RPC 实际 Chain ID，并要求它等于 `network.params` 中的 `CHAIN_ID`；`anvil31337_dev` 因为启用 `DEPLOY_TEST_WBNB=true`，不需要填写 `WBNB_ADDRESS`。
 
