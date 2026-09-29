@@ -43,7 +43,7 @@ contract Deploy {
 
         if (vm.envOr("WRITE_ADDRESS_FILE", false)) {
             string memory network = vm.envOr("network", string("anvil31337_dev"));
-            string memory path = string.concat("script/network/", network, "/address.params");
+            string memory path = string.concat("script/network/", network, "/addresses.dex.params");
             vm.writeFile(
                 path,
                 string.concat(

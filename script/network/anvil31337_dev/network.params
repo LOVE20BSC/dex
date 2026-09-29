@@ -1,4 +1,2 @@
 CHAIN_ID=31337
 RPC_URL=http://127.0.0.1:8545
-# Deploy upstream WETH9 locally and use it as TestWBNB.
-DEPLOY_TEST_WBNB=true

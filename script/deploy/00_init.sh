@@ -16,6 +16,9 @@ source "$network_dir/network.params"
 [ -n "$RPC_URL" ] || fail "RPC_URL is not set"
 actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL" 2>/dev/null)" || fail "Cannot read Chain ID from RPC_URL"
 [ "$actual_chain_id" = "$CHAIN_ID" ] || fail "Chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id"
+
+[ -f "$network_dir/dex.params" ] || fail "Missing $network_dir/dex.params"
+source "$network_dir/dex.params"
 [ "${DEPLOY_TEST_WBNB:-false}" = "true" ] || [ -n "$WBNB_ADDRESS" ] || fail "WBNB_ADDRESS is not set"
 
 source "$network_dir/.account" 2>/dev/null || fail "Missing $network_dir/.account"
