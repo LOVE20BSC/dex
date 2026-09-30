@@ -103,7 +103,7 @@ else
 fi
 
 # 2. 验证 Factory
-print_contract_header "2" "PancakeFactory" "$FACTORY_ADDRESS"
+print_contract_header "2" "UniswapV2Factory" "$FACTORY_ADDRESS"
 verify_deployed "Factory" "$FACTORY_ADDRESS" || ((FAILED++))
 
 ACTUAL_FEETO=$(cast call "$FACTORY_ADDRESS" "feeTo()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
@@ -113,7 +113,7 @@ ACTUAL_FEETOSETTER=$(cast call "$FACTORY_ADDRESS" "feeToSetter()(address)" --rpc
 verify_value "feeToSetter" "0x0000000000000000000000000000000000000000" "$ACTUAL_FEETOSETTER" || ((FAILED++))
 
 # 3. 验证 Router
-print_contract_header "3" "PancakeRouter" "$ROUTER_ADDRESS"
+print_contract_header "3" "UniswapV2Router02" "$ROUTER_ADDRESS"
 verify_deployed "Router" "$ROUTER_ADDRESS" || ((FAILED++))
 
 ACTUAL_FACTORY=$(cast call "$ROUTER_ADDRESS" "factory()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
