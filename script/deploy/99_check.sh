@@ -1,136 +1,58 @@
 #!/usr/bin/env bash
+
+# 独立复核：只读参数文件与 addresses.dex.params，核对链上取值。
+# 六项全部跑完再汇总，不中途退出；不读 .account、不需要密码，可随时重跑。
+# 用法：script/deploy/99_check.sh <network>
+
 set -euo pipefail
 
-# 颜色定义
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-CYAN='\033[0;36m'
-GRAY='\033[0;90m'
-NC='\033[0m' # No Color
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
-echo ""
-echo -e "${CYAN}╔════════════════════════════════════════╗${NC}"
-echo -e "${CYAN}║    Verifying DEX Contract Deployment  ║${NC}"
-echo -e "${CYAN}╚════════════════════════════════════════╝${NC}"
-echo ""
+network="${1:?usage: script/deploy/99_check.sh <network>}"
+network_dir="$DEX_ROOT/script/network/$network"
+[ -d "$network_dir" ] || { echo "Error: unknown network: $network" >&2; exit 1; }
+source "$network_dir/network.params"
+source "$network_dir/dex.params"
+source "$network_dir/addresses.dex.params"
 
-# 检查所有合约地址是否已设置
-if [ -z "${FACTORY_ADDRESS:-}" ] || [ -z "${ROUTER_ADDRESS:-}" ] || [ -z "${WBNB_ADDRESS:-}" ]; then
-    echo -e "${RED}✗ Error: Not all contract addresses are set${NC}"
-    exit 1
-fi
+actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL")"
+[ "$actual_chain_id" = "$CHAIN_ID" ] || { echo "Error: chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id" >&2; exit 1; }
 
-# 辅助函数：标准化输出（去掉引号和科学计数法标记）
-normalize_output() {
-    local value="$1"
-    # 去掉首尾引号
-    value="${value%\"}"
-    value="${value#\"}"
-    # 去掉科学计数法标记 [1e18]
-    value="${value% \[*\]}"
-    echo "$value"
-}
-
-# 辅助函数：验证单个值
-verify_value() {
-    local field_name=$1
-    local expected=$2
-    local actual=$3
-
-    # 标准化两个值
-    expected=$(normalize_output "$expected")
-    actual=$(normalize_output "$actual")
-
-    if [ "$expected" = "$actual" ]; then
-        echo -e "  ${GREEN}✓${NC} ${field_name}"
-        echo -e "    ${GRAY}Expected: ${expected}${NC}"
-        echo -e "    ${GRAY}Actual:   ${actual}${NC}"
-        return 0
-    else
-        echo -e "  ${RED}✗${NC} ${field_name}"
-        echo -e "    ${GRAY}Expected: ${expected}${NC}"
-        echo -e "    ${YELLOW}Actual:   ${actual}${NC}"
-        return 1
-    fi
-}
-
-# 辅助函数：验证合约是否部署
-verify_deployed() {
-    local name=$1
-    local address=$2
-
-    local code=$(cast code "$address" --rpc-url "$RPC_URL" 2>/dev/null)
-    if [ "$code" = "0x" ]; then
-        echo -e "${RED}✗ $name not deployed at $address${NC}"
-        return 1
-    fi
-    return 0
-}
-
-# 辅助函数：打印合约头部
-print_contract_header() {
-    local num=$1
-    local name=$2
-    local address=$3
-    echo ""
-    echo -e "${BLUE}[$num/3]${NC} ${CYAN}${name}${NC}"
-    echo -e "${GRAY}      ${address}${NC}"
-}
-
-FAILED=0
-
-# 1. 验证 WBNB (或测试网的 WETH)
+# TestWBNB 是上游 WETH9；cast 的 string 返回值自带引号，故期望值按带引号字面量写。
 if [ "${DEPLOY_TEST_WBNB:-false}" = "true" ]; then
-    print_contract_header "1" "WETH9 (TestWBNB)" "$WBNB_ADDRESS"
-    verify_deployed "WETH9" "$WBNB_ADDRESS" || ((FAILED++))
-
-    ACTUAL_NAME=$(cast call "$WBNB_ADDRESS" "name()(string)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "name" "Wrapped Ether" "$ACTUAL_NAME" || ((FAILED++))
-
-    ACTUAL_SYMBOL=$(cast call "$WBNB_ADDRESS" "symbol()(string)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "symbol" "WETH" "$ACTUAL_SYMBOL" || ((FAILED++))
+    expected_name='"Wrapped Ether"'
+    expected_symbol='"WETH"'
 else
-    print_contract_header "1" "WBNB" "$WBNB_ADDRESS"
-    verify_deployed "WBNB" "$WBNB_ADDRESS" || ((FAILED++))
-
-    ACTUAL_NAME=$(cast call "$WBNB_ADDRESS" "name()(string)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "name" "Wrapped BNB" "$ACTUAL_NAME" || ((FAILED++))
-
-    ACTUAL_SYMBOL=$(cast call "$WBNB_ADDRESS" "symbol()(string)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-    verify_value "symbol" "WBNB" "$ACTUAL_SYMBOL" || ((FAILED++))
+    expected_name='"Wrapped BNB"'
+    expected_symbol='"WBNB"'
 fi
 
-# 2. 验证 Factory
-print_contract_header "2" "UniswapV2Factory" "$FACTORY_ADDRESS"
-verify_deployed "Factory" "$FACTORY_ADDRESS" || ((FAILED++))
+failed=0
+check() {
+    local name="$1" address="$2" signature="$3" expected="$4" actual
+    actual="$(cast call "$address" "$signature" --rpc-url "$RPC_URL" 2>/dev/null || echo ERROR)"
+    if [ "$(printf '%s' "$actual" | tr '[:upper:]' '[:lower:]')" = "$(printf '%s' "$expected" | tr '[:upper:]' '[:lower:]')" ]; then
+        echo "✓ $name = $actual"
+        return
+    fi
+    failed=$((failed + 1))
+    echo "✗ $name"
+    echo "    合约: $address"
+    echo "    调用: $signature"
+    echo "    实际: $actual"
+    echo "    期望: $expected"
+}
 
-ACTUAL_FEETO=$(cast call "$FACTORY_ADDRESS" "feeTo()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-verify_value "feeTo" "0x0000000000000000000000000000000000000000" "$ACTUAL_FEETO" || ((FAILED++))
+check "WBNB 名称" "$WBNB_ADDRESS" "name()(string)" "$expected_name"
+check "WBNB 符号" "$WBNB_ADDRESS" "symbol()(string)" "$expected_symbol"
+check "Factory 抽成收款地址为零 (feeTo)" "$FACTORY_ADDRESS" "feeTo()(address)" 0x0000000000000000000000000000000000000000
+check "Factory 抽成管理员为零 (feeToSetter)" "$FACTORY_ADDRESS" "feeToSetter()(address)" 0x0000000000000000000000000000000000000000
+check "Router 使用本 Factory (factory)" "$ROUTER_ADDRESS" "factory()(address)" "$FACTORY_ADDRESS"
+check "Router 使用本 WBNB (WETH)" "$ROUTER_ADDRESS" "WETH()(address)" "$WBNB_ADDRESS"
 
-ACTUAL_FEETOSETTER=$(cast call "$FACTORY_ADDRESS" "feeToSetter()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-verify_value "feeToSetter" "0x0000000000000000000000000000000000000000" "$ACTUAL_FEETOSETTER" || ((FAILED++))
-
-# 3. 验证 Router
-print_contract_header "3" "UniswapV2Router02" "$ROUTER_ADDRESS"
-verify_deployed "Router" "$ROUTER_ADDRESS" || ((FAILED++))
-
-ACTUAL_FACTORY=$(cast call "$ROUTER_ADDRESS" "factory()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-verify_value "factory" "$FACTORY_ADDRESS" "$ACTUAL_FACTORY" || ((FAILED++))
-
-ACTUAL_WETH=$(cast call "$ROUTER_ADDRESS" "WETH()(address)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
-verify_value "WETH" "$WBNB_ADDRESS" "$ACTUAL_WETH" || ((FAILED++))
-
-echo ""
-echo -e "${CYAN}════════════════════════════════════════${NC}"
-if [ $FAILED -eq 0 ]; then
-    echo -e "${GREEN}✓ All verifications passed${NC}"
-    echo -e "${CYAN}════════════════════════════════════════${NC}"
-    echo ""
-else
-    echo -e "${RED}✗ $FAILED verification(s) failed${NC}"
-    echo -e "${CYAN}════════════════════════════════════════${NC}"
-    echo ""
+if [ "$failed" -ne 0 ]; then
+    echo "✗ $failed 项不符" >&2
     exit 1
 fi
+echo "✓ Deployment verified"

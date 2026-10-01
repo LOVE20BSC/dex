@@ -5,8 +5,8 @@ import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV
 import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUniswapV2Router02.sol";
 
 interface Vm {
-    function envAddress(string calldata name) external view returns (address);
     function envOr(string calldata name, bool defaultValue) external view returns (bool);
+    function envOr(string calldata name, address defaultValue) external view returns (address);
     function envOr(string calldata name, string calldata defaultValue) external view returns (string memory);
     function getCode(string calldata artifactPath) external view returns (bytes memory);
     function startBroadcast() external;
@@ -20,7 +20,6 @@ contract Deploy {
     bytes32 internal constant PAIR_INIT_CODE_HASH = 0x96e8ac4277198ff8b6f785478aa9a39f403cb768dd02cbee326c3e7da348845f;
 
     function run() public returns (IUniswapV2Factory factory, IUniswapV2Router02 router) {
-        bool deployTestWbnb = vm.envOr("DEPLOY_TEST_WBNB", false);
         require(
             keccak256(vm.getCode("build/core/UniswapV2Pair.sol/UniswapV2Pair.json")) == PAIR_INIT_CODE_HASH,
             "Pair bytecode does not match the upstream Router"
@@ -31,8 +30,9 @@ contract Deploy {
         bytes memory routerCode = vm.getCode("build/periphery/UniswapV2Router02.sol/UniswapV2Router02.json");
 
         vm.startBroadcast();
-        address wbnb =
-            deployTestWbnb ? _deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json")) : vm.envAddress("WBNB");
+        address wbnb = vm.envOr("DEPLOY_TEST_WBNB", false)
+            ? _deploy(vm.getCode("build/periphery/WETH9.sol/WETH9.json"))
+            : vm.envOr("WBNB_ADDRESS", address(0));
         require(wbnb.code.length != 0, "WBNB must be a deployed contract");
         factory = IUniswapV2Factory(_deploy(factoryCode));
         router = IUniswapV2Router02(_deploy(abi.encodePacked(routerCode, abi.encode(address(factory), wbnb))));
@@ -41,16 +41,14 @@ contract Deploy {
         require(factory.feeTo() == address(0) && factory.feeToSetter() == address(0), "Protocol fee is not locked");
         require(router.factory() == address(factory) && router.WETH() == wbnb, "Router configuration mismatch");
 
-        if (vm.envOr("WRITE_ADDRESS_FILE", false)) {
-            string memory network = vm.envOr("network", string("anvil31337_dev"));
-            string memory path = string.concat("script/network/", network, "/addresses.dex.params");
+        string memory addressesFile = vm.envOr("ADDRESSES_FILE", string(""));
+        if (bytes(addressesFile).length != 0) {
             vm.writeFile(
-                path,
+                addressesFile,
                 string.concat(
                     "WBNB_ADDRESS=",
                     vm.toString(wbnb),
-                    "\n",
-                    "FACTORY_ADDRESS=",
+                    "\nFACTORY_ADDRESS=",
                     vm.toString(address(factory)),
                     "\nROUTER_ADDRESS=",
                     vm.toString(address(router)),
