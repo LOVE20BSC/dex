@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity =0.8.37;
 
-import {Deploy} from "../script/Deploy.s.sol";
+import {DeployWETH} from "../script/DeployWETH.s.sol";
+import {DeployUniswapV2} from "../script/DeployUniswapV2.s.sol";
 import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 import {IUniswapV2Pair} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 import {IERC20} from "@uniswap/v2-core/contracts/interfaces/IERC20.sol";
@@ -16,7 +17,7 @@ interface TestVm {
     function expectRevert(bytes calldata reason) external;
 }
 
-contract DexTest is Deploy {
+contract DexTest is DeployUniswapV2 {
     TestVm private constant testVm = TestVm(address(vm));
     IUniswapV2Factory private factory;
     IUniswapV2Router02 private router;
@@ -26,7 +27,9 @@ contract DexTest is Deploy {
 
     function setUp() public {
         token = IERC20(_deploy(abi.encodePacked(vm.getCode("build/core/ERC20.sol/ERC20.json"), abi.encode(1e27))));
-        testVm.setEnv("DEPLOY_TEST_WBNB", "true");
+        // 未配置 WETH_ADDRESS：WETH 模块本地部署上游 WETH9（本地 anvil 路径）。
+        address wethAddress = new DeployWETH().run();
+        testVm.setEnv("WETH_ADDRESS", vm.toString(wethAddress));
         (factory, router) = run();
         weth = IWETH(router.WETH());
         pair = IUniswapV2Pair(factory.createPair(address(token), address(weth)));

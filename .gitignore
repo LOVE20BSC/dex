@@ -5,4 +5,3 @@
 .env
 .DS_Store
 /script/network/*/.account
-/script/network/*/addresses.*.params
