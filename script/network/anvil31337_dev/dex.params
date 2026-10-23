@@ -1,2 +1,8 @@
-# 本地 anvil：不配置 WETH_ADDRESS，部署时本地部署上游 WETH9 充当 WETH。
-# 公共链在此配置官方 WETH 地址（BSC 上即官方 WBNB），配置后不本地部署。
+# WETH 三参数严格二选一：
+#   WETH_ADDRESS 单独有值 -> 使用外部已部署 WETH，不部署；
+#   WETH_NAME + WETH_SYMBOL 同时有值（WETH_ADDRESS 为空）-> 本地部署可配置 WETH。
+# 地址与名称/符号同时有、全空、或只给一个名称/符号都会报错。
+# 本地 anvil 使用下面的 name/symbol；公共链填写官方 WETH 地址（BSC 上即官方 WBNB），
+# 且不要再配置 WETH_NAME/WETH_SYMBOL。
+WETH_NAME="Test Wrapped ETH"
+WETH_SYMBOL=TestWETH

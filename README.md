@@ -72,7 +72,7 @@ cast wallet import <account-name> --interactive
 
 （另可用 `cast wallet new-mnemonic` 生成新助记词、`cast wallet address --account <account-name>` 查地址，详见 [Foundry 文档](https://book.getfoundry.sh/reference/cast/cast-wallet)。）
 
-将 `<account-name>` 和对应地址填入目标网络的 `.account` 文件（必需）。部署时 macOS 会通过弹窗读取 keystore 密码；`one_click_deploy.sh` 入口把密码**只解析一次**（先重置、再读 `.account`、最后才交互）并导出给两个部署模块，不会各弹一次窗；单独运行某个部署模块时，该模块按 环境变量 → `.account` → 交互 自行解析。已设 `KEYSTORE_PASSWORD`（写进 `.account`，或单独跑某步骤时经环境变量）时跳过弹窗，便于非交互调用；但**入口不接受通过环境变量传密码**——`KEYSTORE_PASSWORD=xxx ./script/deploy/one_click_deploy.sh <net>` 里的值会被入口重置掉（有意为之，避免上次运行的残留密码被静默复用），非交互场景请把密码写进 `.account`。非 macOS 环境没有 `osascript`，必须预设 `KEYSTORE_PASSWORD`，脚本会在缺失时明确报错。
+将 `<account-name>` 和对应地址填入目标网络的 `.account` 文件（必需）。部署时 macOS 会通过弹窗读取 keystore 密码；`one_click_deploy.sh` 入口把密码**只解析一次**（先重置、再读 `.account`、最后才交互）并导出给两个部署模块，不会各弹一次窗；单独运行某个部署模块时，该模块按 环境变量 → `.account` → 交互 自行解析。已设 `KEYSTORE_PASSWORD`（写进 `.account`，或单独跑某步骤时经环境变量）时跳过弹窗，便于非交互调用；但**入口不接受通过环境变量传密码**——`KEYSTORE_PASSWORD=xxx ./script/deploy/one_click_deploy.sh <net>` 里的值会被入口重置掉（有意为之，避免上次运行的残留密码被静默复用），非交互场景请把密码写进 `.account`。非 macOS 环境没有 `osascript`，必须预设 `KEYSTORE_PASSWORD`，脚本会在缺失时明确报错。密码经权限 600 的临时文件以 `--password-file` 传给 forge，不进进程参数；广播结束或脚本退出时删除。
 
 ### 部署流程
 
@@ -82,9 +82,9 @@ cast wallet import <account-name> --interactive
 
 | 步骤文件 | 自行载入的输入 | 职责 |
 | --- | --- | --- |
-| `11_deploy_weth.sh` | `network.params`、`dex.params`、`.account` | 就绪 WETH：配置了 `WETH_ADDRESS` 则校验使用，未配置则本地部署 WETH9；地址写入 `addresses.weth.params` |
+| `11_deploy_weth.sh` | `network.params`、`dex.params`；本地部署模式另需 `.account` | 就绪 WETH：`WETH_ADDRESS` 非空则校验使用、不部署；为空则用 `WETH_NAME`/`WETH_SYMBOL` 部署可配置 WETH；地址写入 `addresses.weth.params` |
 | `12_deploy_uniswapv2.sh` | `network.params`、`addresses.weth.params`、`.account` | 部署 Factory 与 Router02（WETH 取上一步写出的地址）；地址写入 `addresses.uniswapv2.params` |
-| `21_check_weth.sh` | `network.params`、`dex.params`、`addresses.weth.params` | 复核 WETH 的名称、符号与部署状态 |
+| `21_check_weth.sh` | `network.params`、`dex.params`、`addresses.weth.params` | 复核 WETH 部署状态；本地部署模式另校验名称与符号 |
 | `22_check_uniswapv2.sh` | `network.params`、`dex.params`、两个模块的地址文件 | 复核 Factory 与 Router02 的绑定关系 |
 | `32_verify.sh` | `network.params`、两个模块的地址文件 | 合约开源验证（只覆盖 UniswapV2 两份本仓库合约）；链不支持时跳过 |
 
@@ -101,7 +101,8 @@ cast wallet import <account-name> --interactive
 
 ```bash
 cp script/network/anvil31337_dev/.account.example script/network/anvil31337_dev/.account
-# 填写 .account 的 keystore 账户和发送地址，并在 dex.params 填写 WETH_ADDRESS
+# 填写 .account 的 keystore 账户和发送地址；在 dex.params 配置 WETH_ADDRESS（外部）
+# 或 WETH_NAME/WETH_SYMBOL（本地部署）
 make build
 script/deploy/one_click_deploy.sh anvil31337_dev
 ```
@@ -109,7 +110,7 @@ script/deploy/one_click_deploy.sh anvil31337_dev
 将来新增合约时，为它写一套自己的步骤脚本，再建一份入口脚本把它接上；已有步骤与入口都不用改——各步骤的部署输入互不要求存在。任一一步都可脱离入口单独执行（注意模块顺序：UniswapV2 模块要求 WETH 模块先就绪）：
 
 ```bash
-script/deploy/11_deploy_weth.sh anvil31337_dev       # 就绪 WETH（读 .account，keystore 签名）
+script/deploy/11_deploy_weth.sh anvil31337_dev       # 就绪 WETH（外部地址模式不读 .account；本地部署模式需要）
 script/deploy/12_deploy_uniswapv2.sh anvil31337_dev  # 部署 Factory 与 Router02
 script/deploy/21_check_weth.sh anvil31337_dev        # 独立复核，只读参数与地址文件，可随时重跑
 script/deploy/22_check_uniswapv2.sh anvil31337_dev
@@ -118,9 +119,15 @@ script/deploy/32_verify.sh anvil31337_dev               # 开源验证，需 ETH
 
 两个复核步骤各自把不符项全部跑完再汇总，不中途退出，便于一次性看到全部不符项；任一不符以非零退出。它们不读 `.account`、不需要密码。改动 `script/deploy/` 下的脚本后，用 `python3 test/deploy_scripts_test.py` 做一次回归（见「构建与测试」）。
 
-`dex.params` 配置 `WETH_ADDRESS` 时（公共链的官方 WETH，BSC 上即官方 WBNB）直接使用该地址；未配置时（`anvil31337_dev`）从上游 WETH9 构建产物本地部署一个充当 WETH（链上名称是上游的 `Wrapped Ether`）。`21_check_weth.sh` 按「是否配置了 `WETH_ADDRESS`」区分名称与符号期望：本地部署验 `Wrapped Ether`/`WETH`，已配置验官方合约的 `Wrapped BNB`/`WBNB`。两个模块的地址分别写入 `script/network/<network>/addresses.weth.params` 与 `addresses.uniswapv2.params` 并纳入 Git 管理（与 `dev-standards` §6.2 一致；只有 `.account` 被 `.gitignore` 排除），不写进 submodule。
+`dex.params` 的 WETH 三参数**严格二选一**，不能同时有值，也不能全空：
 
-各部署步骤要求 RPC 的实际 Chain ID 等于 `network.params` 里的 `CHAIN_ID`。`DeployWETH.s.sol` 与 `DeployUniswapV2.s.sol` 在广播前先模拟：WETH 必须是已部署合约，Factory 的 `feeTo` 与 `feeToSetter` 必须为零，Router 的 `factory`/`WETH` 必须指向本次结果，否则整笔回滚。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。
+- `WETH_ADDRESS` 单独有值：使用外部已部署 WETH。`11_deploy_weth.sh` 只校验地址并写入地址文件，**不触发部署**，也不需要 `.account`；`WETH_NAME`/`WETH_SYMBOL` 必须为空，`21_check_weth.sh` 只校验地址。
+- `WETH_NAME` + `WETH_SYMBOL` 同时有值（`WETH_ADDRESS` 为空）：`11_deploy_weth.sh` 用它们部署一个可配置名称/符号的 WETH（`WETH9Configurable`），并在 `21_check_weth.sh` 中校验名称与符号。只有这个模式需要 `.account` 与 keystore 签名。
+- 地址与名称/符号同时有、全空、或只给一个名称/符号，部署与复核脚本都会在广播前报错。
+
+`anvil31337_dev` 使用 `TestWETH`/`Test Wrapped ETH`；公共链填写官方 WETH 地址（BSC 上即官方 WBNB），不要再配置名称/符号。两个模块的地址分别写入 `script/network/<network>/addresses.weth.params` 与 `addresses.uniswapv2.params` 并纳入 Git 管理（与 `dev-standards` §6.2 一致；只有 `.account` 被 `.gitignore` 排除），不写进 submodule。
+
+各部署步骤要求 RPC 的实际 Chain ID 等于 `network.params` 里的 `CHAIN_ID`。`DeployWETH.s.sol` 只负责本地部署（名称/符号来自 `WETH_NAME`/`WETH_SYMBOL`）；`DeployUniswapV2.s.sol` 在广播前先模拟：WETH 必须是已部署合约，Factory 的 `feeTo` 与 `feeToSetter` 必须为零，Router 的 `factory`/`WETH` 必须指向本次结果，否则整笔回滚。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。
 
 LOVE20 的 Launch 与 Stake 配置同一个 Factory，Stake 的 Router 配置为这里部署的 Router02：添加/移除流动性直接调用 Pair，手续费换币调用 Router 的 `getAmountsOut` 与 `swapExactTokensForTokens`。
 

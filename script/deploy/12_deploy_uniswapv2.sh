@@ -51,6 +51,13 @@ APPLESCRIPT
 )"
 fi
 
+# 密码经临时文件传给 forge：--password 会把明文放进进程参数（/proc/<pid>/cmdline 权限 0444，
+# 本机所有用户可读）。trap 在写入密码之前安装，chmod/printf 失败也不会留下明文。
+PASSWORD_FILE=$(mktemp)
+trap 'rm -f "$PASSWORD_FILE"' EXIT
+chmod 600 "$PASSWORD_FILE"
+printf '%s' "$KEYSTORE_PASSWORD" > "$PASSWORD_FILE"
+
 # WETH 必须是已部署合约：Router 构造参数绑定它，配错会白广播 Factory 与 Router。
 weth_code=$(cast code "$WETH_ADDRESS" --rpc-url "$RPC_URL" 2>/dev/null) || true
 if [[ ! "$weth_code" =~ ^0x[0-9a-fA-F]+$ ]]; then
@@ -66,7 +73,9 @@ cd "$DEX_ROOT"
 echo "Deploying Uniswap V2 Factory and Router02 to $network..."
 forge script script/DeployUniswapV2.s.sol:DeployUniswapV2 --sig "run()" \
     --rpc-url "$RPC_URL" --account "$KEYSTORE_ACCOUNT" --sender "$ACCOUNT_ADDRESS" \
-    --password "$KEYSTORE_PASSWORD" --broadcast --legacy
+    --password-file "$PASSWORD_FILE" --broadcast --legacy
+# 密码只在本次 forge 调用期间需要，广播结束立即删除。
+rm -f "$PASSWORD_FILE"
 
 source "$NETWORK_DIR/addresses.uniswapv2.params"
 echo "✓ Factory: $FACTORY_ADDRESS"

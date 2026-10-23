@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 
-# 独立复核（WETH 模块）：只读参数文件与链上取值，核对 WETH 的名称、符号与部署状态。
+# 独立复核（WETH 模块）：只读参数文件与链上取值，核对 WETH 的部署状态；
+# 外部 WETH 模式只校验地址；本地部署模式校验 dex.params 中的名称与符号。
 # 用法：script/deploy/21_check_weth.sh <network>
 
 set -euo pipefail
@@ -16,13 +17,26 @@ for config in network.params dex.params addresses.weth.params; do
     [ -f "$network_dir/$config" ] || { echo "Error: missing $network_dir/$config" >&2; exit 1; }
 done
 
-# 清掉可能从调用者环境继承来的取值；dex.params 配置了 WETH 地址（公共链）才使用它。
-WETH_ADDRESS=""
+# 清掉可能从调用者环境继承来的取值；名称/符号来自 dex.params，地址以地址文件为准。
+WETH_ADDRESS="" WETH_NAME="" WETH_SYMBOL=""
 source "$network_dir/network.params"
 source "$network_dir/dex.params"
-# 记录 dex.params 是否配置了 WETH 地址：未配置表示本次本地部署的是上游 WETH9，名称符号期望不同。
-weth_configured="${WETH_ADDRESS:-}"
-source "$network_dir/addresses.weth.params"
+configured_weth_address="${WETH_ADDRESS:-}"
+configured_weth_name="${WETH_NAME:-}"
+configured_weth_symbol="${WETH_SYMBOL:-}"
+
+# 三参数严格二选一：地址单独有值，或 name+symbol 同时有值；不能同时有、全空或只给一个。
+if [ -n "$configured_weth_address" ]; then
+    if [ -n "$configured_weth_name" ] || [ -n "$configured_weth_symbol" ]; then
+        echo "Error: WETH_ADDRESS and WETH_NAME/WETH_SYMBOL are mutually exclusive in $network_dir/dex.params" >&2
+        exit 1
+    fi
+else
+    if [ -z "$configured_weth_name" ] || [ -z "$configured_weth_symbol" ]; then
+        echo "Error: WETH_ADDRESS is empty; both WETH_NAME and WETH_SYMBOL are required in $network_dir/dex.params" >&2
+        exit 1
+    fi
+fi
 
 # 地址文件的键集合必须与期望合约集合一致：键名漏改会让后续变量静默为空，
 # 逐项 cast 调用要到很后面才以难以定位的形式失败，故在此显式断言。
@@ -36,18 +50,18 @@ if [ "$actual_keys" != "$(printf '%s\n' $expected_keys | sort | tr '\n' ' ')" ];
     exit 1
 fi
 
+source "$network_dir/addresses.weth.params"
+if [ -n "$configured_weth_address" ]; then
+    actual_configured_address="$(printf '%s' "$WETH_ADDRESS" | tr '[:upper:]' '[:lower:]')"
+    expected_configured_address="$(printf '%s' "$configured_weth_address" | tr '[:upper:]' '[:lower:]')"
+    if [ "$actual_configured_address" != "$expected_configured_address" ]; then
+        echo "Error: $network_dir/addresses.weth.params WETH_ADDRESS does not match dex.params WETH_ADDRESS" >&2
+        exit 1
+    fi
+fi
+
 actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL")"
 [ "$actual_chain_id" = "$CHAIN_ID" ] || { echo "Error: chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id" >&2; exit 1; }
-
-# 本地部署的 WETH 是上游 WETH9；配置了地址的是链上官方合约（BSC 上为 WBNB）。
-# cast 的 string 返回值自带引号，故期望值按带引号字面量写。
-if [ -n "$weth_configured" ]; then
-    expected_name='"Wrapped BNB"'
-    expected_symbol='"WBNB"'
-else
-    expected_name='"Wrapped Ether"'
-    expected_symbol='"WETH"'
-fi
 
 failed=0
 check() {
@@ -65,8 +79,13 @@ check() {
     echo "    期望: $expected"
 }
 
-check "WETH 名称" "$WETH_ADDRESS" "name()(string)" "$expected_name"
-check "WETH 符号" "$WETH_ADDRESS" "symbol()(string)" "$expected_symbol"
+# 外部 WETH 模式只校验地址；本地部署模式校验配置的名称与符号。
+if [ -n "$configured_weth_address" ]; then
+    echo "Skip WETH 名称/符号（外部 WETH 只校验地址）"
+else
+    check "WETH 名称" "$WETH_ADDRESS" "name()(string)" "\"$configured_weth_name\""
+    check "WETH 符号" "$WETH_ADDRESS" "symbol()(string)" "\"$configured_weth_symbol\""
+fi
 
 weth_code=$(cast code "$WETH_ADDRESS" --rpc-url "$RPC_URL" 2>/dev/null) || true
 if [[ ! "$weth_code" =~ ^0x[0-9a-fA-F]+$ ]]; then
