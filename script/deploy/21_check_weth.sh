@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # 独立复核（WETH 模块）：只读参数文件与链上取值，核对 WETH 的部署状态；
-# 外部 WETH 模式只校验地址；本地部署模式校验 dex.params 中的名称与符号。
+# 两种模式都校验地址、decimals 与 deposit/withdraw；本地部署模式另校验名称与符号。
 # 用法：script/deploy/21_check_weth.sh <network>
 
 set -euo pipefail
@@ -93,6 +93,22 @@ if [[ ! "$weth_code" =~ ^0x[0-9a-fA-F]+$ ]]; then
     echo "✗ WETH 未部署: $WETH_ADDRESS"
 else
     echo "✓ WETH 已部署"
+fi
+
+weth_probe_from=0x000000000000000000000000000000000000dEaD
+weth_decimals=$(cast call "$WETH_ADDRESS" "decimals()(uint8)" --rpc-url "$RPC_URL" 2>/dev/null || echo "ERROR")
+if [ "$weth_decimals" = "18" ]; then
+    echo "✓ WETH decimals = 18"
+else
+    failed=$((failed + 1))
+    echo "✗ WETH decimals (actual: $weth_decimals)"
+fi
+if cast call "$WETH_ADDRESS" "deposit()" --from "$weth_probe_from" --rpc-url "$RPC_URL" >/dev/null 2>&1 \
+    && cast call "$WETH_ADDRESS" "withdraw(uint256)" 0 --from "$weth_probe_from" --rpc-url "$RPC_URL" >/dev/null 2>&1; then
+    echo "✓ WETH deposit/withdraw"
+else
+    failed=$((failed + 1))
+    echo "✗ WETH deposit/withdraw"
 fi
 
 if [ "$failed" -ne 0 ]; then

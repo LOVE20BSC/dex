@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 步骤五：合约开源验证（UniswapV2 模块）。自包含——自行载入 network.params 与两个模块的
+# 步骤三（UniswapV2 模块）：合约开源验证。自包含——自行载入 network.params 与两个模块的
 # 地址文件（WETH_ADDRESS 取自 addresses.weth.params），不依赖入口脚本在部署后刷新地址。
-# WETH 不在此验证：公共链上是官方既有合约（BSC 上为官方 WBNB），编译设置与本仓库不同，
-# 按本地源码提交必然失败；本地链的 WETH9 随整链跳过开源验证，无可验证场景。
+# WETH 不在本步骤验证：外部 WETH 由对方维护；本地部署的 WETH 由 31_verify_weth.sh 验证。
 # 用法：script/deploy/32_verify.sh <network>
 
 network="${1:?usage: script/deploy/32_verify.sh <network>}"

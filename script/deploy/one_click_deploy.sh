@@ -3,7 +3,7 @@ set -euo pipefail
 
 # 入口：纯编排。自身不 source 任何环境文件——各步骤各自加载自己的输入，
 # 统一 <step>.sh <network> 一种调用形态，步骤之间互不调用、互不依赖预载环境。
-# 模块顺序即依赖顺序：deploy 1x / check 2x / verify 3x；WETH 模块（11/21）在前，
+# 模块顺序即依赖顺序：deploy 1x / check 2x / verify 3x；WETH 模块（11/21/31）在前，
 # UniswapV2 模块（12/22/32）在后。
 # 将来新增合约时，新建模块自己的步骤脚本与 one_click_deploy_<名称>.sh，现有文件不用改。
 # 用法：script/deploy/one_click_deploy.sh <network>
@@ -68,7 +68,9 @@ if ! bash "$SCRIPT_DIR/21_check_weth.sh" "$network" || ! bash "$SCRIPT_DIR/22_ch
     exit 1
 fi
 
-# 步骤五：合约开源验证（自载入地址文件）。链不支持开源验证时自行跳过。
+# 步骤五/六：合约开源验证（自载入地址文件）。链不支持开源验证时自行跳过；
+# 外部 WETH 不验证（由对方部署维护），本地 WETH 走 31_verify_weth.sh。
+bash "$SCRIPT_DIR/31_verify_weth.sh" "$network"
 bash "$SCRIPT_DIR/32_verify.sh" "$network"
 
 echo "✓ Deployment completed: $network"

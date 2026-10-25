@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 pragma solidity =0.8.37;
 
-import {DeployWETH} from "../script/DeployWETH.s.sol";
-import {DeployUniswapV2} from "../script/DeployUniswapV2.s.sol";
+import {DeployWETH} from "../script/deploy/DeployWETH.s.sol";
+import {DeployUniswapV2} from "../script/deploy/DeployUniswapV2.s.sol";
 import {IUniswapV2Factory} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Factory.sol";
 import {IUniswapV2Pair} from "@uniswap/v2-core/contracts/interfaces/IUniswapV2Pair.sol";
 import {IERC20} from "@uniswap/v2-core/contracts/interfaces/IERC20.sol";
@@ -15,6 +15,7 @@ interface TestVm {
     function assume(bool condition) external;
     function prank(address sender) external;
     function expectRevert(bytes calldata reason) external;
+    function toString(uint256 value) external pure returns (string memory);
 }
 
 contract DexTest is DeployUniswapV2 {
@@ -28,6 +29,9 @@ contract DexTest is DeployUniswapV2 {
     function setUp() public {
         token = IERC20(_deploy(abi.encodePacked(vm.getCode("build/core/ERC20.sol/ERC20.json"), abi.encode(1e27))));
         // 未配置 WETH_ADDRESS：WETH 模块本地部署上游 WETH9（本地 anvil 路径）。
+        testVm.setEnv("CHAIN_ID", testVm.toString(block.chainid));
+        testVm.setEnv("WETH_NAME", "Test Wrapped ETH");
+        testVm.setEnv("WETH_SYMBOL", "TestWETH");
         address wethAddress = new DeployWETH().run();
         testVm.setEnv("WETH_ADDRESS", vm.toString(wethAddress));
         (factory, router) = run();

@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 DEX = Path(__file__).resolve().parents[1]
@@ -35,8 +36,6 @@ def fake_tool(tool, args):
         if args[0] == "chain-id":
             print(os.environ.get("RPC_CHAIN", data["chain_id"]))
         elif args[0] == "code":
-            if os.environ.get("RPC_CODE_ERROR"):
-                return 1
             print("0x01")
         elif args[0] == "call":
             key = args[1].lower() + "/" + args[2]
@@ -56,15 +55,20 @@ def fake_tool(tool, args):
         if os.environ.get("FORGE_FAIL"):
             return 1
         if args[0] == "script":
-            # 凭据哨兵：密码不得进进程参数，密码文件必须已写入且非空。
+            # 凭据哨兵：密码不得进进程参数；需要广播时密码文件必须已写入且非空。
             if "--password" in args:
                 print("CREDENTIAL_IN_ARGV", file=sys.stderr)
-            password_file = args[args.index("--password-file") + 1] if "--password-file" in args else None
-            if not password_file or not Path(password_file).is_file() or not Path(password_file).read_text():
-                print("PASSWORD_FILE_MISSING", file=sys.stderr)
-            else:
-                print("PASSWORD_SHA=" + hashlib.sha256(Path(password_file).read_bytes()).hexdigest(),
-                      file=sys.stderr)
+            if "--broadcast" in args:
+                password_file = args[args.index("--password-file") + 1] if "--password-file" in args else None
+                if not password_file or not Path(password_file).is_file() or not Path(password_file).read_text():
+                    print("PASSWORD_FILE_MISSING", file=sys.stderr)
+                else:
+                    print("PASSWORD_SHA=" + hashlib.sha256(Path(password_file).read_bytes()).hexdigest(),
+                          file=sys.stderr)
+                name = "DeployWETH" if "DeployWETH" in args[1] else "DeployUniswapV2"
+                artifact = Path(os.environ["MOCK_BROADCAST_ROOT"]) / f"{name}.s.sol" / "97" / "run-latest.json"
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_text(json.dumps({"timestamp": int(time.time() * 1000)}))
             target = Path(os.environ["ADDRESSES_FILE"])
             if "DeployWETH" in args[1]:
                 target.write_text("WETH_ADDRESS=" + data["deployed"]["weth"] + "\n")
@@ -98,6 +102,9 @@ def main():
         calls = {
             WETH.lower() + "/name()(string)": '"Wrapped BNB"',
             WETH.lower() + "/symbol()(string)": '"WBNB"',
+            WETH.lower() + "/decimals()(uint8)": "18",
+            WETH.lower() + "/deposit()": "",
+            WETH.lower() + "/withdraw(uint256)": "",
             FACTORY.lower() + "/feeTo()(address)": ZERO,
             FACTORY.lower() + "/feeToSetter()(address)": ZERO,
             ROUTER.lower() + "/factory()(address)": FACTORY,
@@ -108,7 +115,8 @@ def main():
         tmp_dir.mkdir()
         deployed = {"weth": WETH, "factory": FACTORY, "router": ROUTER}
         base = {"PATH": str(bin_dir) + os.pathsep + os.environ["PATH"], "MOCK_DATA": str(data_path),
-                "MOCK_LOG": str(log_path), "MOCK_TMP": str(tmp_dir), "ETHERSCAN_API_KEY": "test-key"}
+                "MOCK_LOG": str(log_path), "MOCK_TMP": str(tmp_dir), "MOCK_BROADCAST_ROOT": str(root / "broadcast"),
+                "ETHERSCAN_API_KEY": "test-key"}
         script = root / "script/deploy"
         weth_file = net / "addresses.weth.params"
         uni_file = net / "addresses.uniswapv2.params"
@@ -161,12 +169,13 @@ def main():
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
             assert "✓ Deployment completed: test" in proc.stdout, proc.stdout
             scripts = [call for call in log if call[:2] == ["forge", "script"]]
-            # 外部 WETH 模式：WETH 步骤不部署，只有 UniswapV2 一笔 forge。
-            assert len(scripts) == 1, log
+            # 外部 WETH 模式：WETH 步骤只做只读模拟校验，UniswapV2 一笔广播。
+            assert len(scripts) == 2, log
+            weth_call = script_call(log, "DeployWETH")
+            assert "--broadcast" not in weth_call and "--account" not in weth_call, weth_call
             uni_call = script_call(log, "DeployUniswapV2")
             assert "--account" in uni_call and "--sender" in uni_call and "--password-file" in uni_call, uni_call
             assert "--broadcast" in uni_call and "--legacy" in uni_call, uni_call
-            assert not any("DeployWETH" in call[2] for call in forge), forge
             # 入口只解析一次 keystore 密码并导出，UniswapV2 步骤沿用。
             assert len(prompts) == 1, f"keystore 密码应只弹一次窗: {log}"
             assert weth_file.read_text().startswith("WETH_ADDRESS=" + WETH), weth_file.read_text()
@@ -175,18 +184,20 @@ def main():
             assert "✓ Factory: " + FACTORY in proc.stdout, proc.stdout
             assert "✓ WETH verified" in proc.stdout and "✓ UniswapV2 verified" in proc.stdout, proc.stdout
             assert "✓ Source verification succeeded for Factory and Router02" in proc.stdout, proc.stdout
-            # 外部 WETH 只校验地址，故只有 Factory 两项 + Router 两项。
-            assert len(calls_made) == 4, log
+            # 外部 WETH：接口校验在 DeployWETH.s.sol 模拟中完成，21 复核 decimals/deposit/withdraw
+            # 三项，22 复核 Factory 两项 + Router 两项。
+            assert len(calls_made) == 7, log
             assert not list(tmp_dir.iterdir()), list(tmp_dir.iterdir())
 
         def module_order():
-            # 编号即依赖顺序：deploy 1x / check 2x / verify 3x；WETH 模块（11/21）在前，UniswapV2 模块（12/22/32）在后。
+            # 编号即依赖顺序：deploy 1x / check 2x / verify 3x；WETH 模块（11/21/31）在前，UniswapV2 模块（12/22/32）在后。
             def number(name):
                 return int(name.split("_", 1)[0])
 
             names = [p.name for p in script.glob("*.sh")]
             assert number("11_deploy_weth.sh") < number("12_deploy_uniswapv2.sh"), names
             assert number("21_check_weth.sh") < number("22_check_uniswapv2.sh"), names
+            assert number("31_verify_weth.sh") < number("32_verify.sh"), names
 
         def step_requires_network():
             fresh()
@@ -199,7 +210,8 @@ def main():
             fresh()
             proc, _, forge, _, _ = run("11_deploy_weth.sh", "test")
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
-            assert not forge, forge
+            assert len(forge) == 1 and "DeployWETH" in forge[0][2], forge
+            assert "--broadcast" not in forge[0], forge
             assert "Using external WETH: " + WETH in proc.stdout, proc.stdout
             assert weth_file.read_text().startswith("WETH_ADDRESS=" + WETH), weth_file.read_text()
             proc, _, forge, _, _ = run("12_deploy_uniswapv2.sh", "test")
@@ -221,7 +233,7 @@ def main():
                         if ln.strip() and not ln.strip().startswith("#")]
 
             for name in ("11_deploy_weth.sh", "12_deploy_uniswapv2.sh", "21_check_weth.sh",
-                         "22_check_uniswapv2.sh", "32_verify.sh", "one_click_deploy.sh"):
+                         "22_check_uniswapv2.sh", "31_verify_weth.sh", "32_verify.sh", "one_click_deploy.sh"):
                 assert not any("00_init" in ln for ln in code_lines(script / name)), name
             entry = code_lines(script / "one_click_deploy.sh")
             assert not any(ln.startswith("source") for ln in entry), "入口不应 source 任何文件"
@@ -251,7 +263,7 @@ def main():
             assert "✓ WETH verified" in proc.stdout, proc.stdout
             assert '✓ WETH 名称 = "Test Wrapped ETH"' in proc.stdout, proc.stdout
             assert '✓ WETH 符号 = "TestWETH"' in proc.stdout, proc.stdout
-            assert len(calls_made) == 6, calls_made  # WETH 名称/符号 + Factory 两项 + Router 两项
+            assert len(calls_made) == 9, calls_made  # WETH 名称/符号 + 接口三项 + Factory 两项 + Router 两项
 
         def key_set_mismatch():
             # 键名漏改（如历史 WBNB_ADDRESS→WETH_ADDRESS 漏改）必须显式失败。
@@ -295,7 +307,8 @@ def main():
             proc, _, forge, _, _ = run("one_click_deploy.sh", "test", WETH_ADDRESS="0x" + "de" * 20)
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
             log = [json.loads(line) for line in log_path.read_text().splitlines()]
-            assert not any("DeployWETH" in call[2] for call in forge), forge
+            weth_call = script_call(log, "DeployWETH")
+            assert "--broadcast" not in weth_call, weth_call
             assert "env:WETH_ADDRESS=" + WETH in script_call(log, "DeployUniswapV2"), script_call(log, "DeployUniswapV2")
             assert weth_file.read_text().startswith("WETH_ADDRESS=" + WETH), weth_file.read_text()
 
@@ -316,10 +329,11 @@ def main():
             uni_file.write_text("# previous deployment\n")
             proc, _, _, calls_made, _ = run("one_click_deploy.sh", "test", FORGE_FAIL="1")
             assert proc.returncode != 0, "rc=0; forge failure ignored: " + proc.stdout
-            # 外部 WETH 步骤不广播，只把配置地址写入记录；失败的是 UniswapV2 广播。
-            assert weth_file.read_text() == "WETH_ADDRESS=" + WETH + "\n", weth_file.read_text()
+            # 外部 WETH 的 Solidity 模拟校验失败，两个地址文件都保持原样。
+            assert weth_file.read_text() == "# previous deployment\n", weth_file.read_text()
             assert uni_file.read_text() == "# previous deployment\n", "stale addresses overwritten"
-            assert not calls_made, "部署失败后不应继续复核"
+            assert calls_made == [], "部署失败后不应继续复核"
+
             assert not list(tmp_dir.iterdir()), list(tmp_dir.iterdir())
 
         def check_failure_rolls_back_both_files():
@@ -387,41 +401,24 @@ def main():
             assert proc.returncode != 0, "缺少 API Key 应失败: " + proc.stdout
             assert not any(call[1] == "verify-contract" for call in forge), forge
 
-        def configured_weth_must_be_deployed():
-            fresh()
-            proc, log, forge, _, _ = run("one_click_deploy.sh", "test", RPC_CODE_ERROR="1")
-            assert proc.returncode != 0, "配置的 WETH 不是已部署合约时应失败: " + proc.stdout
-            assert not forge, "WETH 校验失败不应广播"
-            assert "WETH_ADDRESS" in proc.stdout + proc.stderr, proc.stdout + proc.stderr
-            assert not list(tmp_dir.iterdir()), list(tmp_dir.iterdir())
-
-        def weth_params_mutually_exclusive():
-            fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
-                          "dex.params": "WETH_ADDRESS=" + WETH
-                          + '\nWETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
-            proc, _, forge, calls_made, _ = run("11_deploy_weth.sh", "test")
-            output = proc.stdout + proc.stderr
-            assert proc.returncode != 0, "地址与名称/符号同时有值应失败: " + output
-            assert "mutually exclusive" in output, output
-            assert not forge and not calls_made, (forge, calls_made)
-
-        def weth_params_incomplete():
-            for dex_params in ("", 'WETH_NAME="Test Wrapped ETH"\n', "WETH_SYMBOL=TestWETH\n"):
-                fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
-                              "dex.params": dex_params})
-                proc, _, forge, calls_made, _ = run("11_deploy_weth.sh", "test")
-                output = proc.stdout + proc.stderr
-                assert proc.returncode != 0, "参数不全应失败: " + output
-                assert "both WETH_NAME and WETH_SYMBOL are required" in output, output
-                assert not forge and not calls_made, (forge, calls_made)
-
         def external_weth_needs_no_account():
             fresh(account=False)
             proc, _, forge, calls_made, _ = run("11_deploy_weth.sh", "test")
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
-            assert not forge and not calls_made, (forge, calls_made)
+            assert len(forge) == 1 and "DeployWETH" in forge[0][2], forge
+            assert "--broadcast" not in forge[0], forge
+            assert calls_made == [], calls_made
             assert "Using external WETH: " + WETH in proc.stdout, proc.stdout
             assert weth_file.read_text().startswith("WETH_ADDRESS=" + WETH), weth_file.read_text()
+
+        def local_weth_requires_account():
+            fresh(account=False, params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
+                                         "dex.params": 'WETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
+            proc, _, forge, _, prompts = run("11_deploy_weth.sh", "test")
+            output = proc.stdout + proc.stderr
+            assert proc.returncode != 0, "本地 WETH 缺 .account 应失败: " + output
+            assert "Missing required configuration" in output, output
+            assert not forge and not prompts, (forge, prompts)
 
         def weth_check_rejects_combination():
             fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
@@ -443,7 +440,7 @@ def main():
             assert "does not match dex.params WETH_ADDRESS" in output, output
             assert not calls_made, calls_made
 
-        case("01 拼装：一键 = 11+12+21+22+32，入口只弹一次窗", one_click)
+        case("01 拼装：一键 = 11+12+21+22+31+32，入口只弹一次窗", one_click)
         case("02 编号即依赖顺序：WETH 在前，UniswapV2 在后", module_order)
         case("03 步骤缺网络名即失败", step_requires_network)
         case("04 两模块部署步骤各自独立跑通", step_standalone)
@@ -465,12 +462,10 @@ def main():
         case("20 BSC 链验证 Factory 与 Router02（含构造参数，不验官方 WETH）", verify_on_bsc)
         case("21 本地链跳过开源验证", verify_skips_local_chain)
         case("22 缺 ETHERSCAN_API_KEY 即失败且不验证", verify_needs_api_key)
-        case("23 配置的 WETH 不是已部署合约即中止", configured_weth_must_be_deployed)
-        case("24 WETH 地址与 name/symbol 不能同时有值", weth_params_mutually_exclusive)
-        case("25 WETH 全空或 name/symbol 只给一个都失败", weth_params_incomplete)
-        case("26 外部 WETH 模式不需要 .account", external_weth_needs_no_account)
-        case("27 复核拒绝地址与 name/symbol 同时配置", weth_check_rejects_combination)
-        case("28 外部地址文件与 dex.params 不一致即失败", weth_check_address_mismatch)
+        case("23 外部 WETH 模式不需要 .account", external_weth_needs_no_account)
+        case("24 本地 WETH 模式缺 .account 即中止", local_weth_requires_account)
+        case("25 复核拒绝地址与 name/symbol 同时配置", weth_check_rejects_combination)
+        case("26 外部地址文件与 dex.params 不一致即失败", weth_check_address_mismatch)
 
         failed = sum(1 for _, status, _ in results if status == "FAIL")
         for name, status, detail in results:
