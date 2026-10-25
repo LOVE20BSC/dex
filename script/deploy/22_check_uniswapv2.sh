@@ -12,14 +12,17 @@ network="${1:?usage: script/deploy/22_check_uniswapv2.sh <network>}"
 network_dir="$DEX_ROOT/script/network/$network"
 [ -d "$network_dir" ] || { echo "Error: unknown network: $network" >&2; exit 1; }
 
+# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+source "$SCRIPT_DIR/params.sh"
+
 for config in network.params dex.params addresses.weth.params addresses.uniswapv2.params; do
     [ -f "$network_dir/$config" ] || { echo "Error: missing $network_dir/$config" >&2; exit 1; }
 done
 
-source "$network_dir/network.params"
-source "$network_dir/dex.params"
-source "$network_dir/addresses.weth.params"
-source "$network_dir/addresses.uniswapv2.params"
+params_load "$network_dir/network.params"
+params_load "$network_dir/dex.params"
+params_load "$network_dir/addresses.weth.params"
+params_load "$network_dir/addresses.uniswapv2.params"
 
 # 地址文件的键集合必须与期望合约集合一致：键名漏改会让后续变量静默为空，
 # 逐项 cast 调用要到很后面才以难以定位的形式失败，故在此显式断言。

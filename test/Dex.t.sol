@@ -28,10 +28,12 @@ contract DexTest is DeployUniswapV2 {
 
     function setUp() public {
         token = IERC20(_deploy(abi.encodePacked(vm.getCode("build/core/ERC20.sol/ERC20.json"), abi.encode(1e27))));
-        // 未配置 WETH_ADDRESS：WETH 模块本地部署上游 WETH9（本地 anvil 路径）。
+        // WETH_ADDRESS 是必填的模式开关（零地址=本地部署上游 WETH9）；ADDRESSES_FILE 与 11/12 的入参同源。
         testVm.setEnv("CHAIN_ID", testVm.toString(block.chainid));
+        testVm.setEnv("WETH_ADDRESS", "0x0000000000000000000000000000000000000000");
         testVm.setEnv("WETH_NAME", "Test Wrapped ETH");
         testVm.setEnv("WETH_SYMBOL", "TestWETH");
+        testVm.setEnv("ADDRESSES_FILE", "cache/test-dex-addresses.params");
         address wethAddress = new DeployWETH().run();
         testVm.setEnv("WETH_ADDRESS", vm.toString(wethAddress));
         (factory, router) = run();

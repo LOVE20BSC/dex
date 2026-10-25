@@ -12,6 +12,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
 
+# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+source "$SCRIPT_DIR/params.sh"
+
 if [ ! -d "$NETWORK_DIR" ]; then
     echo "Error: Network directory not found: $NETWORK_DIR"
     exit 1
@@ -24,11 +27,9 @@ for config in network.params addresses.weth.params addresses.uniswapv2.params; d
     fi
 done
 
-set -a
-source "$NETWORK_DIR/network.params"
-source "$NETWORK_DIR/addresses.weth.params"
-source "$NETWORK_DIR/addresses.uniswapv2.params"
-set +a
+params_load "$NETWORK_DIR/network.params"
+params_load "$NETWORK_DIR/addresses.weth.params"
+params_load "$NETWORK_DIR/addresses.uniswapv2.params"
 
 cd "$DEX_ROOT"
 
@@ -75,7 +76,7 @@ verify_contract() {
 
 # 只验证本仓库部署的两份合约。WETH 不在此验证：公共链上是官方既有合约
 # （BSC 上为官方 WBNB），其编译设置与本仓库不同，按本地源码提交必然失败；
-# 本地链（未配置 WETH_ADDRESS）的 WETH9 随整链跳过开源验证，无可验证场景。
+# 本地链（WETH_ADDRESS=零地址）的 WETH9 随整链跳过开源验证，无可验证场景。
 verify_contract "$FACTORY_ADDRESS" lib/v2-core/contracts/UniswapV2Factory.sol UniswapV2Factory --constructor-args "$FACTORY_ARGS"
 verify_contract "$ROUTER_ADDRESS" lib/v2-periphery/contracts/UniswapV2Router02.sol UniswapV2Router02 --constructor-args "$ROUTER_ARGS"
 echo "✓ Source verification succeeded for Factory and Router02"

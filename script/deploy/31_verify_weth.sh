@@ -11,6 +11,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
 
+# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+source "$SCRIPT_DIR/params.sh"
+
 if [ ! -d "$NETWORK_DIR" ]; then
     echo "Error: Network directory not found: $NETWORK_DIR"
     exit 1
@@ -24,12 +27,11 @@ for config in network.params dex.params addresses.weth.params; do
 done
 
 WETH_ADDRESS="" WETH_NAME="" WETH_SYMBOL=""
-set -a
-source "$NETWORK_DIR/network.params"
-source "$NETWORK_DIR/dex.params"
+params_load "$NETWORK_DIR/network.params"
+params_load "$NETWORK_DIR/dex.params"
 configured_weth_address="${WETH_ADDRESS:-}"
-source "$NETWORK_DIR/addresses.weth.params"
-set +a
+params_load "$NETWORK_DIR/addresses.weth.params"
+zero_address=0x0000000000000000000000000000000000000000
 
 cd "$DEX_ROOT"
 
@@ -38,7 +40,12 @@ case "$CHAIN_ID" in
     *) echo "Skip: source verification is not configured for chain $CHAIN_ID"; exit 0 ;;
 esac
 
-if [ -n "$configured_weth_address" ]; then
+# WETH_ADDRESS 是必填的模式开关（零地址=本地部署）；缺键或空值直接失败，不按任一模式继续。
+if [ -z "$configured_weth_address" ]; then
+    echo "Error: WETH_ADDRESS must be set in $NETWORK_DIR/dex.params (use $zero_address to deploy locally)" >&2
+    exit 1
+fi
+if [ "$(printf '%s' "$configured_weth_address" | tr '[:upper:]' '[:lower:]')" != "$zero_address" ]; then
     echo "Skip: external WETH is verified by its own deployment, not this repository"
     exit 0
 fi

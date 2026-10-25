@@ -82,7 +82,30 @@ def fake_tool(tool, args):
     return 0
 
 
+def params_loader_cases() -> None:
+    """params.sh：1e 写法展开、行尾注释、引号内 # 保留、逗号项去空格。"""
+    cases = [
+        ("A=1e17\n", "100000000000000000"),
+        ("A=3e15  # 0.30%\n", "3000000000000000"),
+        ("A=1_000\n", "1000"),
+        ('A="a # b"\n', "a # b"),
+        ("A=1e17, 4e17\n", "100000000000000000,400000000000000000"),
+        ("A=x1e5y\n", "x1e5y"),
+    ]
+    with tempfile.TemporaryDirectory(prefix="params-loader-test-") as directory:
+        path = Path(directory) / "case.params"
+        for text, expected in cases:
+            path.write_text(text)
+            result = subprocess.run(
+                ["bash", "-c", '. "$1"; params_load "$2"; printf "%s" "$A"',
+                 "bash", str(DEX / "script/deploy/params.sh"), str(path)],
+                text=True, capture_output=True)
+            assert result.returncode == 0, (text, result.stderr)
+            assert result.stdout == expected, (text, result.stdout)
+
+
 def main():
+    params_loader_cases()
     source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEX / "script/deploy"
     print(f"# scripts under test: {source}")
     results = []
@@ -253,9 +276,10 @@ def main():
             assert "✓ UniswapV2 verified" in proc.stdout, proc.stdout
 
         def local_deploy_mode():
-            # 不配置 WETH_ADDRESS：WETH_NAME + WETH_SYMBOL 本地部署可配置 WETH。
+            # WETH_ADDRESS 显式配零地址：WETH_NAME + WETH_SYMBOL 本地部署可配置 WETH。
             fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
-                          "dex.params": 'WETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
+                          "dex.params": "WETH_ADDRESS=" + ZERO
+                          + '\nWETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
             set_data({WETH.lower() + "/name()(string)": '"Test Wrapped ETH"',
                       WETH.lower() + "/symbol()(string)": '"TestWETH"'})
             proc, _, _, calls_made, _ = run("one_click_deploy.sh", "test")
@@ -413,12 +437,31 @@ def main():
 
         def local_weth_requires_account():
             fresh(account=False, params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
-                                         "dex.params": 'WETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
+                                         "dex.params": "WETH_ADDRESS=" + ZERO
+                                         + '\nWETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
             proc, _, forge, _, prompts = run("11_deploy_weth.sh", "test")
             output = proc.stdout + proc.stderr
             assert proc.returncode != 0, "本地 WETH 缺 .account 应失败: " + output
             assert "Missing required configuration" in output, output
             assert not forge and not prompts, (forge, prompts)
+
+        def weth_address_key_required():
+            # WETH_ADDRESS 是必填模式开关：缺键不能被当成「本地部署」，否则漏配外部地址会静默部署假 WETH。
+            fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
+                          "dex.params": 'WETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
+            proc, log, forge, _, prompts = run("11_deploy_weth.sh", "test")
+            output = proc.stdout + proc.stderr
+            assert proc.returncode != 0, "缺 WETH_ADDRESS 应失败: " + output
+            assert "WETH_ADDRESS must be set" in output, output
+            assert not forge and not prompts, (forge, prompts)
+            assert not weth_file.exists(), weth_file.read_text()
+            # 复核侧同样拒绝缺键：补齐地址文件后仍应在模式判定处失败，且不发起任何链上调用。
+            weth_file.write_text("WETH_ADDRESS=" + WETH + "\n")
+            proc, _, _, calls_made, _ = run("21_check_weth.sh", "test")
+            output = proc.stdout + proc.stderr
+            assert proc.returncode != 0, "复核同样应拒绝缺键: " + output
+            assert "WETH_ADDRESS must be set" in output, output
+            assert not calls_made, calls_made
 
         def weth_check_rejects_combination():
             fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
@@ -447,7 +490,7 @@ def main():
         case("05 UniswapV2 模块要求 WETH 模块先就绪", uniswapv2_requires_weth_file)
         case("06 无 00_init：入口不 source、步骤自行载入", step_has_no_init)
         case("07 复核步骤可独立跑（无 .account、无密码、不调 forge）", check_standalone_real)
-        case("08 本地部署 WETH 模式（不配置 WETH_ADDRESS）", local_deploy_mode)
+        case("08 本地部署 WETH 模式（WETH_ADDRESS=零地址 + name/symbol）", local_deploy_mode)
         case("09 地址文件键集合不符即显式失败", key_set_mismatch)
         case("10 链 ID 不匹配即中止且不广播", bad_chain)
         case("11 缺 .account 即中止且不弹窗不广播", no_account)
@@ -466,6 +509,7 @@ def main():
         case("24 本地 WETH 模式缺 .account 即中止", local_weth_requires_account)
         case("25 复核拒绝地址与 name/symbol 同时配置", weth_check_rejects_combination)
         case("26 外部地址文件与 dex.params 不一致即失败", weth_check_address_mismatch)
+        case("27 缺 WETH_ADDRESS 即失败（不回落本地部署）", weth_address_key_required)
 
         failed = sum(1 for _, status, _ in results if status == "FAIL")
         for name, status, detail in results:

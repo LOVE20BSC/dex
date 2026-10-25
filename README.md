@@ -82,7 +82,7 @@ cast wallet import <account-name> --interactive
 
 | 步骤文件 | 自行载入的输入 | 职责 |
 | --- | --- | --- |
-| `11_deploy_weth.sh` | `network.params`、`dex.params`；本地部署模式另需 `.account` | 就绪 WETH：`WETH_ADDRESS` 非空则用 `DeployWETH.s.sol` 只读模拟校验并采用；为空则用 `WETH_NAME`/`WETH_SYMBOL` 部署可配置 WETH；地址原子写入 `addresses.weth.params` |
+| `11_deploy_weth.sh` | `network.params`、`dex.params`；本地部署模式另需 `.account` | 就绪 WETH：`WETH_ADDRESS` 非零则用 `DeployWETH.s.sol` 只读模拟校验并采用；为零地址则用 `WETH_NAME`/`WETH_SYMBOL` 部署可配置 WETH；地址原子写入 `addresses.weth.params` |
 | `12_deploy_uniswapv2.sh` | `network.params`、`addresses.weth.params`、`.account` | 部署 Factory 与 Router02（WETH 取上一步写出的地址）；地址原子写入 `addresses.uniswapv2.params` |
 | `21_check_weth.sh` | `network.params`、`dex.params`、`addresses.weth.params` | 复核 WETH 部署状态、`decimals/deposit/withdraw`；本地部署模式另校验名称与符号 |
 | `22_check_uniswapv2.sh` | `network.params`、`dex.params`、两个模块的地址文件 | 复核 Factory 与 Router02 的绑定关系 |
@@ -102,8 +102,8 @@ cast wallet import <account-name> --interactive
 
 ```bash
 cp script/network/anvil31337_dev/.account.example script/network/anvil31337_dev/.account
-# 填写 .account 的 keystore 账户和发送地址；在 dex.params 配置 WETH_ADDRESS（外部）
-# 或 WETH_NAME/WETH_SYMBOL（本地部署）
+# 填写 .account 的 keystore 账户和发送地址；在 dex.params 配置 WETH_ADDRESS（外部地址）
+# 或 WETH_ADDRESS=0x0000000000000000000000000000000000000000 + WETH_NAME/WETH_SYMBOL（本地部署）
 make build
 script/deploy/one_click_deploy.sh anvil31337_dev
 ```
@@ -121,15 +121,17 @@ script/deploy/32_verify.sh anvil31337_dev             # 开源验证，需 ETHER
 
 两个复核步骤各自把不符项全部跑完再汇总，不中途退出，便于一次性看到全部不符项；任一不符以非零退出。它们不读 `.account`、不需要密码。改动 `script/deploy/` 下的脚本后，用 `python3 test/deploy_scripts_test.py` 做一次回归（见「构建与测试」）。
 
-`dex.params` 的 WETH 三参数**严格二选一**，不能同时有值，也不能全空：
+`dex.params` 的 `WETH_ADDRESS` 是**必填的模式开关**，三参数严格二选一，不能同时有值，也不能只给一个名称/符号：
 
-- `WETH_ADDRESS` 单独有值：使用外部已部署 WETH。`11_deploy_weth.sh` 让 `DeployWETH.s.sol` 在只读模拟中校验地址有代码、`decimals() == 18` 与 `deposit/withdraw` 接口，然后写入地址文件，**不触发部署**，也不需要 `.account`；`WETH_NAME`/`WETH_SYMBOL` 必须为空，`21_check_weth.sh` 复核同样的接口。
-- `WETH_NAME` + `WETH_SYMBOL` 同时有值（`WETH_ADDRESS` 为空）：`DeployWETH.s.sol` 用它们部署一个可配置名称/符号的 WETH（`WETH9Configurable`）并在部署后校验名称/符号/decimals，`21_check_weth.sh` 再独立复核；`31_verify_weth.sh` 对它做开源验证。只有这个模式需要 `.account` 与 keystore 签名。
-- 地址与名称/符号同时有、全空、或只给一个名称/符号，部署与复核脚本都会在广播前报错。
+- `WETH_ADDRESS` 非零：使用外部已部署 WETH。`11_deploy_weth.sh` 让 `DeployWETH.s.sol` 在只读模拟中校验地址有代码、`decimals() == 18` 与 `deposit/withdraw` 接口，然后写入地址文件，**不触发部署**，也不需要 `.account`；`WETH_NAME`/`WETH_SYMBOL` 必须为空，`21_check_weth.sh` 复核同样的接口。
+- `WETH_ADDRESS` 为零地址：`DeployWETH.s.sol` 用 `WETH_NAME`/`WETH_SYMBOL` 部署一个可配置名称/符号的 WETH（`WETH9Configurable`）并在部署后校验名称/符号/decimals，`21_check_weth.sh` 再独立复核；`31_verify_weth.sh` 对它做开源验证。只有这个模式需要 `.account` 与 keystore 签名。
+- 键缺失或为空、地址与名称/符号同时有、或只给一个名称/符号，部署与复核脚本都会在广播前报错。**不存在「不填 WETH_ADDRESS 就走本地部署」的默认路径**——省略键与「选择外部 WETH」共用同一种表示时，漏配或拼错会静默退化成部署一个本地 WETH。
 
 `anvil31337_dev` 使用 `TestWETH`/`Test Wrapped ETH`；公共链填写官方 WETH 地址（BSC 上即官方 WBNB），不要再配置名称/符号。两个模块的地址分别写入 `script/network/<network>/addresses.weth.params` 与 `addresses.uniswapv2.params` 并纳入 Git 管理（与 `dev-standards` §6.2 一致；只有 `.account` 被 `.gitignore` 排除），不写进 submodule。
 
-各部署步骤要求 RPC 的实际 Chain ID 等于 `network.params` 里的 `CHAIN_ID`。`script/deploy/DeployWETH.s.sol` 在广播前校验 WETH 三参数互斥、外部 WETH 有代码且接口可用（本地模式校验名称/符号非空），本地部署后再校验名称/符号/decimals；`script/deploy/DeployUniswapV2.s.sol` 在广播前校验 WETH 有代码与三份上游 artifact 哈希，部署后校验 Factory 的 `feeTo`/`feeToSetter` 为零、Router 的 `factory`/`WETH` 指向本次结果。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。两个 `.s.sol` 只把地址写到隐藏临时文件，由 `11`/`12` 校验后原子替换正式地址文件。
+`*.params` 里的长整数可写成 `<尾数>e<指数>`（`1e17` 即 10%）或带下划线的分组写法（`1_000_000`），由 `script/deploy/params.sh` 在载入时展开为十进制再导出；展开是纯词法的、没有键表，写错的写法会留给 `vm.envUint` 在广播前报错。
+
+各部署步骤要求 RPC 的实际 Chain ID 等于 `network.params` 里的 `CHAIN_ID`。`script/deploy/DeployWETH.s.sol` 在广播前校验 `WETH_ADDRESS` 必填、三参数互斥、外部 WETH 有代码且接口可用（本地模式校验名称/符号非空），本地部署后再校验名称/符号/decimals；`script/deploy/DeployUniswapV2.s.sol` 在广播前校验 WETH 有代码与三份上游 artifact 哈希，部署后校验 Factory 的 `feeTo`/`feeToSetter` 为零、Router 的 `factory`/`WETH` 指向本次结果。若 Router 交易失败，Factory 仍可单独保留；广播记录位于 Foundry 的 `broadcast/` 目录。两个 `.s.sol` 只把地址写到隐藏临时文件，由 `11`/`12` 校验后原子替换正式地址文件。
 
 LOVE20 的 Launch 与 Stake 配置同一个 Factory，Stake 的 Router 配置为这里部署的 Router02：添加/移除流动性直接调用 Pair，手续费换币调用 Router 的 `getAmountsOut` 与 `swapExactTokensForTokens`。
 

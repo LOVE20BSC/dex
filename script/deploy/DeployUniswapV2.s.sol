@@ -6,7 +6,7 @@ import {IUniswapV2Router02} from "@uniswap/v2-periphery/contracts/interfaces/IUn
 
 interface Vm {
     function envAddress(string calldata name) external view returns (address);
-    function envOr(string calldata name, string calldata defaultValue) external view returns (string memory);
+    function envString(string calldata name) external view returns (string memory);
     function envUint(string calldata name) external view returns (uint256);
     function getCode(string calldata artifactPath) external view returns (bytes memory);
     function startBroadcast() external;
@@ -88,18 +88,15 @@ contract DeployUniswapV2 {
     }
 
     function _writeAddresses(address factory, address router) internal {
-        string memory addressesFile = vm.envOr("ADDRESSES_FILE", string(""));
-        if (bytes(addressesFile).length != 0) {
-            vm.writeFile(
-                addressesFile,
-                string.concat(
-                    "FACTORY_ADDRESS=",
-                    vm.toString(factory),
-                    "\nROUTER_ADDRESS=",
-                    vm.toString(router),
-                    "\n"
-                )
-            );
-        }
+        vm.writeFile(
+            vm.envString("ADDRESSES_FILE"),
+            string.concat(
+                "FACTORY_ADDRESS=",
+                vm.toString(factory),
+                "\nROUTER_ADDRESS=",
+                vm.toString(router),
+                "\n"
+            )
+        );
     }
 }

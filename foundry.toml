@@ -14,6 +14,8 @@ remappings = [
 fs_permissions = [
   { access = "read", path = "./build" },
   { access = "read-write", path = "./script/network" },
+  # 脚本测试用固定路径代替 11/12 传入的临时地址文件（ADDRESSES_FILE 为必填参数）。
+  { access = "read-write", path = "./cache" },
 ]
 
 [lint]

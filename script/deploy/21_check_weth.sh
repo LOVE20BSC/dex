@@ -13,27 +13,42 @@ network="${1:?usage: script/deploy/21_check_weth.sh <network>}"
 network_dir="$DEX_ROOT/script/network/$network"
 [ -d "$network_dir" ] || { echo "Error: unknown network: $network" >&2; exit 1; }
 
+# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+source "$SCRIPT_DIR/params.sh"
+
 for config in network.params dex.params addresses.weth.params; do
     [ -f "$network_dir/$config" ] || { echo "Error: missing $network_dir/$config" >&2; exit 1; }
 done
 
 # 清掉可能从调用者环境继承来的取值；名称/符号来自 dex.params，地址以地址文件为准。
 WETH_ADDRESS="" WETH_NAME="" WETH_SYMBOL=""
-source "$network_dir/network.params"
-source "$network_dir/dex.params"
+params_load "$network_dir/network.params"
+params_load "$network_dir/dex.params"
 configured_weth_address="${WETH_ADDRESS:-}"
 configured_weth_name="${WETH_NAME:-}"
 configured_weth_symbol="${WETH_SYMBOL:-}"
+zero_address=0x0000000000000000000000000000000000000000
 
-# 三参数严格二选一：地址单独有值，或 name+symbol 同时有值；不能同时有、全空或只给一个。
-if [ -n "$configured_weth_address" ]; then
+# WETH_ADDRESS 是必填的模式开关（零地址=本地部署）；缺键或空值直接失败，不按任一模式继续。
+if [ -z "$configured_weth_address" ]; then
+    echo "Error: WETH_ADDRESS must be set in $network_dir/dex.params (use $zero_address to deploy locally)" >&2
+    exit 1
+fi
+if [ "$(printf '%s' "$configured_weth_address" | tr '[:upper:]' '[:lower:]')" = "$zero_address" ]; then
+    configured_weth_external=0
+else
+    configured_weth_external=1
+fi
+
+# 三参数严格二选一：非零地址单独有值，或零地址 + name/symbol 同时有值；不能同时有、全空或只给一个。
+if [ "$configured_weth_external" -eq 1 ]; then
     if [ -n "$configured_weth_name" ] || [ -n "$configured_weth_symbol" ]; then
         echo "Error: WETH_ADDRESS and WETH_NAME/WETH_SYMBOL are mutually exclusive in $network_dir/dex.params" >&2
         exit 1
     fi
 else
     if [ -z "$configured_weth_name" ] || [ -z "$configured_weth_symbol" ]; then
-        echo "Error: WETH_ADDRESS is empty; both WETH_NAME and WETH_SYMBOL are required in $network_dir/dex.params" >&2
+        echo "Error: WETH_ADDRESS is zero; both WETH_NAME and WETH_SYMBOL are required in $network_dir/dex.params" >&2
         exit 1
     fi
 fi
@@ -50,8 +65,8 @@ if [ "$actual_keys" != "$(printf '%s\n' $expected_keys | sort | tr '\n' ' ')" ];
     exit 1
 fi
 
-source "$network_dir/addresses.weth.params"
-if [ -n "$configured_weth_address" ]; then
+params_load "$network_dir/addresses.weth.params"
+if [ "$configured_weth_external" -eq 1 ]; then
     actual_configured_address="$(printf '%s' "$WETH_ADDRESS" | tr '[:upper:]' '[:lower:]')"
     expected_configured_address="$(printf '%s' "$configured_weth_address" | tr '[:upper:]' '[:lower:]')"
     if [ "$actual_configured_address" != "$expected_configured_address" ]; then
@@ -80,7 +95,7 @@ check() {
 }
 
 # 外部 WETH 模式只校验地址；本地部署模式校验配置的名称与符号。
-if [ -n "$configured_weth_address" ]; then
+if [ "$configured_weth_external" -eq 1 ]; then
     echo "Skip WETH 名称/符号（外部 WETH 只校验地址）"
 else
     check "WETH 名称" "$WETH_ADDRESS" "name()(string)" "\"$configured_weth_name\""

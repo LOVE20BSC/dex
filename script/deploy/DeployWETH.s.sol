@@ -5,7 +5,8 @@ import {WETH9Configurable} from "../WETH9Configurable.sol";
 
 interface Vm {
     function envOr(string calldata name, string calldata defaultValue) external view returns (string memory);
-    function envOr(string calldata name, address defaultValue) external view returns (address);
+    function envAddress(string calldata name) external view returns (address);
+    function envString(string calldata name) external view returns (string memory);
     function envUint(string calldata name) external view returns (uint256);
     function startBroadcast() external;
     function stopBroadcast() external;
@@ -48,9 +49,11 @@ contract DeployWETH {
         _writeAddresses(weth);
     }
 
+    // WETH_ADDRESS 同时是模式开关：零地址=本地部署，非零=复用外部 WETH。键缺失或拼错即 revert，
+    // 不回落到任一分支——否则「漏配外部地址」会静默变成「本地部署一个假 WETH」。
     function _loadConfig() internal view returns (WethConfig memory config) {
         config.chainId = vm.envUint("CHAIN_ID");
-        config.externalWeth = vm.envOr("WETH_ADDRESS", address(0));
+        config.externalWeth = vm.envAddress("WETH_ADDRESS");
         config.name = vm.envOr("WETH_NAME", string(""));
         config.symbol = vm.envOr("WETH_SYMBOL", string(""));
     }
@@ -104,9 +107,6 @@ contract DeployWETH {
     }
 
     function _writeAddresses(address weth) internal {
-        string memory addressesFile = vm.envOr("ADDRESSES_FILE", string(""));
-        if (bytes(addressesFile).length != 0) {
-            vm.writeFile(addressesFile, string.concat("WETH_ADDRESS=", vm.toString(weth), "\n"));
-        }
+        vm.writeFile(vm.envString("ADDRESSES_FILE"), string.concat("WETH_ADDRESS=", vm.toString(weth), "\n"));
     }
 }
