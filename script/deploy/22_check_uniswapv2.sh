@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 
-# 独立复核（UniswapV2 模块）：只读参数文件与链上取值，核对 Factory 与 Router02 的绑定关系。
-# 用法：script/deploy/22_check_uniswapv2.sh <network>
+# Independent check (UniswapV2 module): reads only the parameter files and chain state to
+# verify the Factory/Router02 bindings.
+# Usage: script/deploy/22_check_uniswapv2.sh <network>
 
 set -euo pipefail
 
@@ -12,20 +13,26 @@ network="${1:?usage: script/deploy/22_check_uniswapv2.sh <network>}"
 network_dir="$DEX_ROOT/script/network/$network"
 [ -d "$network_dir" ] || { echo "Error: unknown network: $network" >&2; exit 1; }
 
-# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+# Parameter file loader: 1e17 / 1_000_000 style literals are expanded to decimal on load (params.sh).
 source "$SCRIPT_DIR/params.sh"
 
-for config in network.params dex.params addresses.weth.params addresses.uniswapv2.params; do
+for config in network.params addresses.weth.params addresses.uniswapv2.params; do
     [ -f "$network_dir/$config" ] || { echo "Error: missing $network_dir/$config" >&2; exit 1; }
 done
 
+# Parameters come from files only: clear every key the files define, so a value exported by the
+# caller cannot override a file value. dex.params is not loaded here: this module reads WETH_ADDRESS
+# from addresses.weth.params, which is the deployed record, and the name/symbol keys only configure
+# a local WETH deployment.
+params_unset_all "$network_dir/network.params" "$network_dir/addresses.weth.params" \
+    "$network_dir/addresses.uniswapv2.params"
+
 params_load "$network_dir/network.params"
-params_load "$network_dir/dex.params"
 params_load "$network_dir/addresses.weth.params"
 params_load "$network_dir/addresses.uniswapv2.params"
 
-# 地址文件的键集合必须与期望合约集合一致：键名漏改会让后续变量静默为空，
-# 逐项 cast 调用要到很后面才以难以定位的形式失败，故在此显式断言。
+# The address file's key set must equal the expected contract set: a renamed key would leave later
+# variables silently empty and fail much later with an unhelpful message, so assert it here.
 assert_key_set() {
     local address_file="$1" expected_keys="$2" actual_keys
     actual_keys=$(grep -oE '^[A-Z0-9_]+=' "$address_file" | sed 's/=$//' | sort | tr '\n' ' ' || true)
@@ -52,19 +59,19 @@ check() {
     fi
     failed=$((failed + 1))
     echo "✗ $name"
-    echo "    合约: $address"
-    echo "    调用: $signature"
-    echo "    实际: $actual"
-    echo "    期望: $expected"
+    echo "    contract: $address"
+    echo "    call: $signature"
+    echo "    actual: $actual"
+    echo "    expected: $expected"
 }
 
-check "Factory 抽成收款地址为零 (feeTo)" "$FACTORY_ADDRESS" "feeTo()(address)" 0x0000000000000000000000000000000000000000
-check "Factory 抽成管理员为零 (feeToSetter)" "$FACTORY_ADDRESS" "feeToSetter()(address)" 0x0000000000000000000000000000000000000000
-check "Router 使用本 Factory (factory)" "$ROUTER_ADDRESS" "factory()(address)" "$FACTORY_ADDRESS"
-check "Router 使用本 WETH (WETH)" "$ROUTER_ADDRESS" "WETH()(address)" "$WETH_ADDRESS"
+check "Factory feeTo is zero" "$FACTORY_ADDRESS" "feeTo()(address)" 0x0000000000000000000000000000000000000000
+check "Factory feeToSetter is zero" "$FACTORY_ADDRESS" "feeToSetter()(address)" 0x0000000000000000000000000000000000000000
+check "Router factory is this Factory" "$ROUTER_ADDRESS" "factory()(address)" "$FACTORY_ADDRESS"
+check "Router WETH is this WETH" "$ROUTER_ADDRESS" "WETH()(address)" "$WETH_ADDRESS"
 
 if [ "$failed" -ne 0 ]; then
-    echo "✗ $failed 项不符" >&2
+    echo "✗ $failed check(s) failed" >&2
     exit 1
 fi
 echo "✓ UniswapV2 verified"

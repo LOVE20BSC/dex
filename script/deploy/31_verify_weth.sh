@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 步骤三（WETH 模块）：本地部署的 WETH 开源验证。自包含——自行载入 network.params、dex.params
-# 与 addresses.weth.params。外部 WETH 由对方维护，不在本仓库验证；链不支持时跳过并返回成功。
-# 用法：script/deploy/31_verify_weth.sh <network>
+# Step 3 (WETH module): source verification of the locally deployed WETH. Self-contained: loads
+# network.params, verifier.params, dex.params and addresses.weth.params. An external WETH is
+# maintained by its owner and not verified here; the step returns success when the chain is listed
+# in VERIFY_SKIP_CHAIN_IDS.
+# Usage: script/deploy/31_verify_weth.sh <network>
 
 network="${1:?usage: script/deploy/31_verify_weth.sh <network>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
+VERIFIER_PARAMS="$DEX_ROOT/script/network/verifier.params"
 
-# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+# Parameter file loader: 1e17 / 1_000_000 style literals are expanded to decimal on load (params.sh).
 source "$SCRIPT_DIR/params.sh"
 
 if [ ! -d "$NETWORK_DIR" ]; then
@@ -25,9 +28,26 @@ for config in network.params dex.params addresses.weth.params; do
         exit 1
     fi
 done
+if [ ! -f "$VERIFIER_PARAMS" ]; then
+    echo "Error: Missing required configuration: $VERIFIER_PARAMS"
+    exit 1
+fi
 
-WETH_ADDRESS="" WETH_NAME="" WETH_SYMBOL=""
+# Parameters come from files only: clear every key the files define, so a value exported by the
+# caller cannot override a file value. WETH_ADDRESS is the mode switch, and an empty value reads as
+# neither "external" nor "local", so it is asserted against the file itself, never against the
+# variable - an inherited value could satisfy that.
+params_require_values "$NETWORK_DIR/dex.params" WETH_ADDRESS || exit 1
+
+# WETH_NAME/WETH_SYMBOL only configure a local deployment; clear any inherited value before loading
+# so an external-mode profile cannot pass a stale name/symbol into the constructor arguments.
+unset WETH_NAME WETH_SYMBOL
+
+params_unset_all "$NETWORK_DIR/network.params" "$VERIFIER_PARAMS" \
+    "$NETWORK_DIR/dex.params" "$NETWORK_DIR/addresses.weth.params"
+
 params_load "$NETWORK_DIR/network.params"
+params_load "$VERIFIER_PARAMS"
 params_load "$NETWORK_DIR/dex.params"
 configured_weth_address="${WETH_ADDRESS:-}"
 params_load "$NETWORK_DIR/addresses.weth.params"
@@ -35,12 +55,22 @@ zero_address=0x0000000000000000000000000000000000000000
 
 cd "$DEX_ROOT"
 
-case "$CHAIN_ID" in
-    56|97) ;;
-    *) echo "Skip: source verification is not configured for chain $CHAIN_ID"; exit 0 ;;
-esac
+# The opt-out list is mandatory as a key but may be empty: "verify every chain" is a legal answer.
+params_require_keys "$VERIFIER_PARAMS" VERIFY_SKIP_CHAIN_IDS || exit 1
 
-# WETH_ADDRESS 是必填的模式开关（零地址=本地部署）；缺键或空值直接失败，不按任一模式继续。
+# Verification is attempted by default: only the chains listed here skip it, so a new production
+# chain fails loudly instead of passing unverified.
+skip_chains=",${VERIFY_SKIP_CHAIN_IDS:-},"
+if [ -n "${CHAIN_ID:-}" ] && [[ "$skip_chains" == *",$CHAIN_ID,"* ]]; then
+    echo "Skip: source verification is disabled for chain $CHAIN_ID in $VERIFIER_PARAMS"
+    exit 0
+fi
+
+# The endpoint is a mandatory key: an empty URL would be passed straight to forge.
+params_require_values "$VERIFIER_PARAMS" ETHERSCAN_VERIFIER_URL || exit 1
+
+# WETH_ADDRESS is a mandatory mode switch (zero address = deploy locally); a missing key or an empty
+# value fails instead of continuing in either mode.
 if [ -z "$configured_weth_address" ]; then
     echo "Error: WETH_ADDRESS must be set in $NETWORK_DIR/dex.params (use $zero_address to deploy locally)" >&2
     exit 1
@@ -50,6 +80,7 @@ if [ "$(printf '%s' "$configured_weth_address" | tr '[:upper:]' '[:lower:]')" !=
     exit 0
 fi
 
+params_require_keys "$NETWORK_DIR/dex.params" WETH_NAME WETH_SYMBOL || exit 1
 if [ -z "${WETH_NAME:-}" ] || [ -z "${WETH_SYMBOL:-}" ]; then
     echo "Error: local WETH deployment is missing WETH_NAME / WETH_SYMBOL in $NETWORK_DIR/dex.params" >&2
     exit 1
@@ -66,6 +97,6 @@ if ! WETH_ARGS=$(cast abi-encode "constructor(string,string)" "$WETH_NAME" "$WET
 fi
 
 forge verify-contract "$WETH_ADDRESS" "script/WETH9Configurable.sol:WETH9Configurable" \
-    --chain "$CHAIN_ID" --verifier etherscan --verifier-url "https://api.etherscan.io/v2/api" \
+    --chain "$CHAIN_ID" --verifier etherscan --verifier-url "$ETHERSCAN_VERIFIER_URL" \
     --constructor-args "$WETH_ARGS" --watch
 echo "✓ Source verification succeeded for WETH"

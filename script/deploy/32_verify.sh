@@ -1,18 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 步骤三（UniswapV2 模块）：合约开源验证。自包含——自行载入 network.params 与两个模块的
-# 地址文件（WETH_ADDRESS 取自 addresses.weth.params），不依赖入口脚本在部署后刷新地址。
-# WETH 不在本步骤验证：外部 WETH 由对方维护；本地部署的 WETH 由 31_verify_weth.sh 验证。
-# 用法：script/deploy/32_verify.sh <network>
+# Step 3 (UniswapV2 module): source verification. Self-contained: loads network.params,
+# verifier.params and both modules' address files (WETH_ADDRESS from addresses.weth.params), without
+# relying on the entrypoint to refresh addresses.
+# WETH is not verified here: an external WETH is maintained by its owner and a locally
+# deployed one is verified by 31_verify_weth.sh.
+# Usage: script/deploy/32_verify.sh <network>
 
 network="${1:?usage: script/deploy/32_verify.sh <network>}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
+VERIFIER_PARAMS="$DEX_ROOT/script/network/verifier.params"
 
-# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+# Parameter file loader: 1e17 / 1_000_000 style literals are expanded to decimal on load (params.sh).
 source "$SCRIPT_DIR/params.sh"
 
 if [ ! -d "$NETWORK_DIR" ]; then
@@ -26,21 +29,40 @@ for config in network.params addresses.weth.params addresses.uniswapv2.params; d
         exit 1
     fi
 done
+if [ ! -f "$VERIFIER_PARAMS" ]; then
+    echo "Error: Missing required configuration: $VERIFIER_PARAMS"
+    exit 1
+fi
+
+# Parameters come from files only: clear every key the files define, so a value exported by the
+# caller cannot override a file value.
+params_unset_all "$NETWORK_DIR/network.params" "$VERIFIER_PARAMS" \
+    "$NETWORK_DIR/addresses.weth.params" "$NETWORK_DIR/addresses.uniswapv2.params"
 
 params_load "$NETWORK_DIR/network.params"
+params_load "$VERIFIER_PARAMS"
 params_load "$NETWORK_DIR/addresses.weth.params"
 params_load "$NETWORK_DIR/addresses.uniswapv2.params"
 
 cd "$DEX_ROOT"
 
-# 链不支持开源验证时跳过，不视为失败，使一键部署在本地/未接入浏览器的链上仍可跑通。
-case "$CHAIN_ID" in
-    56|97) ;;
-    *) echo "Skip: source verification is not configured for chain $CHAIN_ID"; exit 0 ;;
-esac
+# The opt-out list is mandatory as a key but may be empty: "verify every chain" is a legal answer.
+params_require_keys "$VERIFIER_PARAMS" VERIFY_SKIP_CHAIN_IDS || exit 1
+
+# Verification is attempted by default: only the chains listed here skip it, so a new production
+# chain fails loudly instead of passing unverified.
+skip_chains=",${VERIFY_SKIP_CHAIN_IDS:-},"
+if [ -n "${CHAIN_ID:-}" ] && [[ "$skip_chains" == *",$CHAIN_ID,"* ]]; then
+    echo "Skip: source verification is disabled for chain $CHAIN_ID in $VERIFIER_PARAMS"
+    exit 0
+fi
+
+# The endpoint is a mandatory key: an empty URL would be passed straight to forge.
+params_require_values "$VERIFIER_PARAMS" ETHERSCAN_VERIFIER_URL || exit 1
 : "${ETHERSCAN_API_KEY:?Set an Etherscan API key; source verification has not run.}"
 
-# 按模块分组校验地址字段来源：WETH 来自 WETH 模块文件，Factory/Router 来自 UniswapV2 模块文件。
+# Verify each address field against its module file: WETH from the WETH module file, Factory/Router
+# from the UniswapV2 module file.
 for field in WETH_ADDRESS; do
     if [[ ! ${!field:-} =~ ^0x[0-9a-fA-F]{40}$ ]] || [[ ${!field:-} = 0x0000000000000000000000000000000000000000 ]]; then
         echo "Error: Missing or invalid $field in $NETWORK_DIR/addresses.weth.params"
@@ -54,9 +76,9 @@ for field in FACTORY_ADDRESS ROUTER_ADDRESS; do
     fi
 done
 
-# Factory 的 feeToSetter 固定为 address(0)（永久放弃协议抽成，见 docs/adr/0001）；
-# Router02 绑定本次部署的 Factory 与 WETH。
-# 命令替换失败在 set -e 下会静默中止，故逐个显式判别，保证失败有明确输出。
+# The Factory fixes feeToSetter to address(0) (protocol fee permanently waived, see docs/adr/0001);
+# Router02 binds this deployment's Factory and WETH. A failing command substitution would silently
+# abort under set -e, so each call is checked explicitly for a clear message.
 if ! FACTORY_ARGS=$(cast abi-encode "constructor(address)" 0x0000000000000000000000000000000000000000); then
     echo "Error: Failed to encode Factory constructor arguments"
     exit 1
@@ -66,7 +88,7 @@ if ! ROUTER_ARGS=$(cast abi-encode "constructor(address,address)" "$FACTORY_ADDR
     exit 1
 fi
 
-COMMON_ARGS=(--chain "$CHAIN_ID" --verifier etherscan --verifier-url "https://api.etherscan.io/v2/api" --watch)
+COMMON_ARGS=(--chain "$CHAIN_ID" --verifier etherscan --verifier-url "$ETHERSCAN_VERIFIER_URL" --watch)
 verify_contract() {
     local address=$1 source=$2 name=$3
     shift 3
@@ -74,9 +96,10 @@ verify_contract() {
     forge verify-contract "$address" "$source:$name" "${COMMON_ARGS[@]}" "$@"
 }
 
-# 只验证本仓库部署的两份合约。WETH 不在此验证：公共链上是官方既有合约
-# （BSC 上为官方 WBNB），其编译设置与本仓库不同，按本地源码提交必然失败；
-# 本地链（WETH_ADDRESS=零地址）的 WETH9 随整链跳过开源验证，无可验证场景。
+# Only the two contracts deployed by this repository are verified. WETH is not verified here: on
+# public chains it is the official pre-existing contract (WBNB on BSC) built with different compiler
+# settings, so submitting local sources always fails; on local chains (WETH_ADDRESS = zero address)
+# WETH9 is skipped together with the whole chain, so there is nothing to verify.
 verify_contract "$FACTORY_ADDRESS" lib/v2-core/contracts/UniswapV2Factory.sol UniswapV2Factory --constructor-args "$FACTORY_ARGS"
 verify_contract "$ROUTER_ADDRESS" lib/v2-periphery/contracts/UniswapV2Router02.sol UniswapV2Router02 --constructor-args "$ROUTER_ARGS"
 echo "✓ Source verification succeeded for Factory and Router02"

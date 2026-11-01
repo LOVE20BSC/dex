@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 入口：纯编排。自身不 source 任何环境文件——各步骤各自加载自己的输入，
-# 统一 <step>.sh <network> 一种调用形态，步骤之间互不调用、互不依赖预载环境。
-# 模块顺序即依赖顺序：deploy 1x / check 2x / verify 3x；WETH 模块（11/21/31）在前，
-# UniswapV2 模块（12/22/32）在后。
-# 将来新增合约时，新建模块自己的步骤脚本与 one_click_deploy_<名称>.sh，现有文件不用改。
-# 用法：script/deploy/one_click_deploy.sh <network>
+# Entrypoint: orchestration only. It sources no environment file itself - each step loads its own
+# inputs, every step is invoked the same way (<step>.sh <network>), and steps never call each
+# other nor depend on a preloaded environment.
+# Module order is dependency order: deploy 1x / check 2x / verify 3x; the WETH module (11/21/31)
+# comes first, the UniswapV2 module (12/22/32) after it.
+# A new contract gets its own step scripts and one_click_deploy_<name>.sh; existing files stay
+# untouched.
+# Usage: script/deploy/one_click_deploy.sh <network>
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -18,10 +20,12 @@ if [ ! -d "$NETWORK_DIR" ]; then
     exit 1
 fi
 
-# keystore 密码整次运行只解析一次：先重置（不继承调用方环境里的旧值，避免上次运行的
-# 残留密码静默复用），再读 .account 的密码行；两者都没有则交互输入一次并导出，全部
-# 部署步骤沿用（两个部署模块不会各弹一次窗）。步骤单独运行时仍自行按
-# 环境变量 → .account → 交互 解析。入口只读取密码行，不 source 配置文件。
+# The keystore password is resolved once per run: reset first (never inherit a value left over in
+# the caller's environment, which would silently reuse the previous run's password), then read the
+# password line from .account; if neither exists, prompt once and export it so every deployment step
+# reuses it (the two deployment modules do not each prompt). A step run on its own still resolves it
+# as environment -> .account -> prompt. The entrypoint only reads the password line and never
+# sources the config file.
 export KEYSTORE_PASSWORD=""
 if [ ! -f "$NETWORK_DIR/.account" ]; then
     echo "Error: Missing required configuration: $NETWORK_DIR/.account"
@@ -43,7 +47,8 @@ APPLESCRIPT
     export KEYSTORE_PASSWORD
 fi
 
-# 部署与校验是分开的步骤，校验失败不应覆盖上次已保存的地址：先备份，校验通过后丢弃，失败则回滚。
+# Deployment and checking are separate steps: a failed check must not overwrite the previously saved
+# addresses. Back them up first, drop the backup once the check passes, restore it on failure.
 BACKUP_DIR="$(mktemp -d)"
 trap 'rm -rf "$BACKUP_DIR"' EXIT
 for file in addresses.weth.params addresses.uniswapv2.params; do
@@ -51,11 +56,13 @@ for file in addresses.weth.params addresses.uniswapv2.params; do
     true
 done
 
-# 步骤一/二：合约部署与初始化（各模块自载入部署输入）。失败时地址文件尚未写入，无需回滚。
+# Steps 1/2: deploy and initialize the contracts (each module loads its own deployment inputs). The
+# address files are not written yet when this fails, so there is nothing to roll back.
 bash "$SCRIPT_DIR/11_deploy_weth.sh" "$network"
 bash "$SCRIPT_DIR/12_deploy_uniswapv2.sh" "$network"
 
-# 步骤三/四：校验部署与初始化是否正确（各模块自载入校验文件，失败回滚已保存地址）。
+# Steps 3/4: verify deployment and initialization (each module loads its own check inputs and
+# restores the saved addresses on failure).
 if ! bash "$SCRIPT_DIR/21_check_weth.sh" "$network" || ! bash "$SCRIPT_DIR/22_check_uniswapv2.sh" "$network"; then
     for file in addresses.weth.params addresses.uniswapv2.params; do
         if [ -f "$BACKUP_DIR/$file" ]; then
@@ -68,8 +75,9 @@ if ! bash "$SCRIPT_DIR/21_check_weth.sh" "$network" || ! bash "$SCRIPT_DIR/22_ch
     exit 1
 fi
 
-# 步骤五/六：合约开源验证（自载入地址文件）。链不支持开源验证时自行跳过；
-# 外部 WETH 不验证（由对方部署维护），本地 WETH 走 31_verify_weth.sh。
+# Steps 5/6: source verification (loads the address files itself). Each step skips itself when the
+# chain has no verification; an external WETH is not verified (its owner maintains it), a locally
+# deployed WETH goes through 31_verify_weth.sh.
 bash "$SCRIPT_DIR/31_verify_weth.sh" "$network"
 bash "$SCRIPT_DIR/32_verify.sh" "$network"
 

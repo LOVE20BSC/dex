@@ -86,8 +86,8 @@ cast wallet import <account-name> --interactive
 | `12_deploy_uniswapv2.sh` | `network.params`、`addresses.weth.params`、`.account` | 部署 Factory 与 Router02（WETH 取上一步写出的地址）；地址原子写入 `addresses.uniswapv2.params` |
 | `21_check_weth.sh` | `network.params`、`dex.params`、`addresses.weth.params` | 复核 WETH 部署状态、`decimals/deposit/withdraw`；本地部署模式另校验名称与符号 |
 | `22_check_uniswapv2.sh` | `network.params`、`dex.params`、两个模块的地址文件 | 复核 Factory 与 Router02 的绑定关系 |
-| `31_verify_weth.sh` | `network.params`、`dex.params`、`addresses.weth.params` | 本地部署 WETH 的开源验证；外部 WETH 跳过（由对方验证）；链不支持时跳过 |
-| `32_verify.sh` | `network.params`、两个模块的地址文件 | 合约开源验证（只覆盖 UniswapV2 两份本仓库合约）；链不支持时跳过 |
+| `31_verify_weth.sh` | `network.params`、`verifier.params`、`dex.params`、`addresses.weth.params` | 本地部署 WETH 的开源验证；外部 WETH 跳过（由对方验证）；`VERIFY_SKIP_CHAIN_IDS` 列出的链跳过 |
+| `32_verify.sh` | `network.params`、`verifier.params`、两个模块的地址文件 | 合约开源验证（只覆盖 UniswapV2 两份本仓库合约）；`VERIFY_SKIP_CHAIN_IDS` 列出的链跳过 |
 
 每个复核步骤都断言**地址文件的键集合等于期望合约集合**：键名漏改（如历史 `WBNB_ADDRESS`→`WETH_ADDRESS` 改造漏改一处）会显式失败，而不是让后续变量静默为空。
 
@@ -116,7 +116,7 @@ script/deploy/12_deploy_uniswapv2.sh anvil31337_dev  # 部署 Factory 与 Router
 script/deploy/21_check_weth.sh anvil31337_dev        # 独立复核，只读参数与地址文件，可随时重跑
 script/deploy/22_check_uniswapv2.sh anvil31337_dev
 script/deploy/31_verify_weth.sh anvil31337_dev       # 本地 WETH 的开源验证；外部 WETH 跳过
-script/deploy/32_verify.sh anvil31337_dev             # 开源验证，需 ETHERSCAN_API_KEY
+script/deploy/32_verify.sh anvil31337_dev             # 开源验证，需 network.params 的 ETHERSCAN_API_KEY
 ```
 
 两个复核步骤各自把不符项全部跑完再汇总，不中途退出，便于一次性看到全部不符项；任一不符以非零退出。它们不读 `.account`、不需要密码。改动 `script/deploy/` 下的脚本后，用 `python3 test/deploy_scripts_test.py` 做一次回归（见「构建与测试」）。

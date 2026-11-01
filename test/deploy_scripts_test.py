@@ -10,6 +10,7 @@
 import hashlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -82,6 +83,21 @@ def fake_tool(tool, args):
     return 0
 
 
+# params.sh 是 core / action / group-chat / dex 四份逐字节相同的副本：每个仓都要能独立部署，
+# 文件无法共享，只能靠这个常量防止漂移。改动该文件时四个仓一起改，并同步这四个常量。
+PARAMS_SH_SHA256 = "b3a8f64dc87d9e823a364de92e3bc79144d246f1c1a861cdcf95616042b8f840"
+
+
+def params_shared_copy() -> None:
+    """params.sh 必须与四仓共享副本逐字节相同。"""
+    repo = Path(__file__).resolve().parents[1]
+    digest = hashlib.sha256((repo / "script/deploy/params.sh").read_bytes()).hexdigest()
+    assert digest == PARAMS_SH_SHA256, (
+        "script/deploy/params.sh 与四仓共享副本不一致（sha256 " + digest + "）；"
+        "把同一个文件同步到 core / action / group-chat / dex"
+    )
+
+
 def params_loader_cases() -> None:
     """params.sh：1e 写法展开、行尾注释、引号内 # 保留、逗号项去空格。"""
     cases = [
@@ -103,9 +119,122 @@ def params_loader_cases() -> None:
             assert result.returncode == 0, (text, result.stderr)
             assert result.stdout == expected, (text, result.stdout)
 
+    # params_unset_all 的键集来自文件本身：文件定义的键必须被清掉，文件没定义的键不受影响。
+    with tempfile.TemporaryDirectory(prefix="params-unset-test-") as directory:
+        path = Path(directory) / "case.params"
+        path.write_text("A=1\n")
+        result = subprocess.run(
+            ["bash", "-c",
+             '. "$1"; A=inherited; B=inherited; params_unset_all "$2"; printf "%s|%s" "${A:-<unset>}" "${B:-<unset>}"',
+             "bash", str(DEX / "script/deploy/params.sh"), str(path)],
+            text=True, capture_output=True)
+        assert result.returncode == 0, (result.stderr,)
+        assert result.stdout == "<unset>|inherited", result.stdout
+
+
+def params_unset_coverage() -> None:
+    """每个 source params.sh 的部署脚本都必须在首次 params_load 之前清掉继承值，
+    且 params_unset_all 的入参必须覆盖 params_load 读到的每个文件。"""
+    repo = Path(__file__).resolve().parents[1]
+    scripts = sorted((repo / "script/deploy").glob("*.sh"))
+    assert scripts
+    for script in scripts:
+        text = script.read_text()
+        if 'source "$SCRIPT_DIR/params.sh"' not in text:
+            continue
+        # 只看代码行：注释里出现同名字符串会让下面两条断言一起误通过。
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        assert "params_unset_all " in code, script
+        assert code.index("params_unset_all ") < code.index("params_load "), script
+        # 续行先拼回一行，否则只看得到首个参数。
+        joined = code.replace("\\\n", " ")
+        statement = re.search(r"params_unset_all(.*)", joined).group(1).split("\n")[0]
+        unset_files = set(re.findall(r'"([^"]+)"', statement))
+        load_files = set(re.findall(r'params_load\s+"([^"]+)"', joined))
+        assert not load_files - unset_files, (script, load_files - unset_files)
+
+
+def _params_required_pairs(text: str) -> set:
+    """脚本里 params_require_keys/values 声明的 (params 文件名, 键)。"""
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    joined = code.replace("\\\n", " ")
+    pairs = set()
+    for match in re.finditer(r'params_require_(?:keys|values)\s+"[^"]*/([^"/]+)"([^\n]*)', joined):
+        # 只看大写键名：尾部还有 `|| exit 1`。
+        pairs.update((match.group(1), key) for key in re.findall(r"\b[A-Z][A-Z0-9_]*\b", match.group(2)))
+    return pairs
+
+
+def _params_loaded_files(text: str) -> set:
+    """脚本里 params_load 读取的 params 文件名。"""
+    code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+    return set(re.findall(r'params_load\s+"[^"]*/([^"/]+)"', code))
+
+
+def params_required_consistency() -> None:
+    """必填键在调用点声明，没有中心键表：读取同一 params 文件的每个步骤必须声明同一组键。
+
+    11/21/31 各自独立执行，谁都可以单独补一个 params_require_*；漏一处会让该步骤在缺键时
+    拿空串继续、而另外两步仍然失败——半红半绿最难定位。
+    """
+    repo = Path(__file__).resolve().parents[1]
+    deploy = repo / "script/deploy"
+    assert not (deploy / "params-required.sh").exists(), (
+        "必填键在调用点用 params_require_keys/values 声明，不再单设 params-required.sh")
+    loaded = {}
+    required = {}
+    for script in sorted(deploy.glob("*.sh")):
+        text = script.read_text()
+        if 'source "$SCRIPT_DIR/params.sh"' not in text:
+            continue
+        for name in _params_loaded_files(text):
+            loaded.setdefault(name, set()).add(script.name)
+        for pair in _params_required_pairs(text):
+            required.setdefault(pair, set()).add(script.name)
+    for (file_name, key), scripts in sorted(required.items()):
+        missing = loaded.get(file_name, set()) - scripts
+        assert not missing, (file_name, key, sorted(missing))
+
+
+def params_preexisting_unset() -> None:
+    """文件可能省略的键必须在载入前显式清掉。
+
+    params_unset_all 的键集来自文件本身，文件里没有的键它不认识。WETH_NAME/WETH_SYMBOL 只在本地
+    部署时出现，外部模式的 profile 省略它们，调用方环境里的同名变量会一路漏到
+    DeployWETH._loadConfig 的 vm.envOr，把正确配置判成「地址与 name/symbol 互斥」。
+    """
+    repo = Path(__file__).resolve().parents[1]
+    for script in sorted((repo / "script/deploy").glob("*.sh")):
+        text = script.read_text()
+        if 'source "$SCRIPT_DIR/params.sh"' not in text:
+            continue
+        if not re.search(r'params_load\s+"\$[A-Za-z_]+/dex\.params"', text):
+            continue
+        code = "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+        assert "unset WETH_NAME WETH_SYMBOL" in code, script
+        assert code.index("unset WETH_NAME WETH_SYMBOL") < code.index("params_load "), script
+
+
+def verifier_skip_never_production() -> None:
+    """生产链不能出现在跳过列表：验证默认开启，跳过必须显式且只针对没有浏览器的链。"""
+    profile = Path(__file__).resolve().parents[1] / "script/network/verifier.params"
+    assert profile.is_file(), "script/network/verifier.params 缺失"
+    text = profile.read_text()
+    url = re.search(r"^ETHERSCAN_VERIFIER_URL=(.*)$", text, re.MULTILINE)
+    skip = re.search(r"^VERIFY_SKIP_CHAIN_IDS=(.*)$", text, re.MULTILINE)
+    assert url and url.group(1).strip(), (profile, "ETHERSCAN_VERIFIER_URL 为空")
+    assert skip, (profile, "缺少 VERIFY_SKIP_CHAIN_IDS")
+    skipped = {item.strip() for item in skip.group(1).split(",") if item.strip()}
+    assert not skipped & {"56", "97"}, (profile, sorted(skipped))
+
 
 def main():
+    params_shared_copy()
     params_loader_cases()
+    params_unset_coverage()
+    params_required_consistency()
+    params_preexisting_unset()
+    verifier_skip_never_production()
     source = Path(sys.argv[1]) if len(sys.argv) > 1 else DEX / "script/deploy"
     print(f"# scripts under test: {source}")
     results = []
@@ -150,8 +279,13 @@ def main():
 
         def fresh(account=True, params=None):
             set_data()
-            for name, text in (params or {"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
-                                          "dex.params": "WETH_ADDRESS=" + WETH + "\n"}).items():
+            # verifier.params 挂在 network 根目录、对所有网络共用，不随网络目录重建。
+            (net.parent / "verifier.params").write_text(
+                "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=31337\n")
+            files = {"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
+                     "dex.params": "WETH_ADDRESS=" + WETH + "\n"}
+            files.update(params or {})
+            for name, text in files.items():
                 (net / name).write_text(text)
             if account:
                 (net / ".account").write_text("KEYSTORE_ACCOUNT=dev1\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\n")
@@ -285,8 +419,8 @@ def main():
             proc, _, _, calls_made, _ = run("one_click_deploy.sh", "test")
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
             assert "✓ WETH verified" in proc.stdout, proc.stdout
-            assert '✓ WETH 名称 = "Test Wrapped ETH"' in proc.stdout, proc.stdout
-            assert '✓ WETH 符号 = "TestWETH"' in proc.stdout, proc.stdout
+            assert '✓ WETH name = "Test Wrapped ETH"' in proc.stdout, proc.stdout
+            assert '✓ WETH symbol = "TestWETH"' in proc.stdout, proc.stdout
             assert len(calls_made) == 9, calls_made  # WETH 名称/符号 + 接口三项 + Factory 两项 + Router 两项
 
         def key_set_mismatch():
@@ -344,8 +478,8 @@ def main():
             proc, log, _, calls_made, _ = run("22_check_uniswapv2.sh", "test")
             assert proc.returncode != 0, "rc=0; mismatches not reported"
             assert proc.stdout.count("✗") == 2, proc.stdout
-            assert "实际: 0x" + "98" * 20 in proc.stdout, proc.stdout
-            assert "✗ 2 项不符" in proc.stderr, proc.stderr
+            assert "actual: 0x" + "98" * 20 in proc.stdout, proc.stdout
+            assert "✗ 2 check(s) failed" in proc.stderr, proc.stderr
 
         def forge_fails():
             fresh()
@@ -419,6 +553,18 @@ def main():
             assert not forge, log
             assert "Skip" in proc.stdout, proc.stdout
 
+        def verify_requires_explicit_skip():
+            fresh()
+            proc, _, _, _, _ = run("one_click_deploy.sh", "test")
+            assert proc.returncode == 0, proc.stdout
+            (net / "network.params").write_text("CHAIN_ID=31337\nRPC_URL=http://invalid.local\n")
+            (net.parent / "verifier.params").write_text(
+                "ETHERSCAN_VERIFIER_URL=https://api.etherscan.io/v2/api\nVERIFY_SKIP_CHAIN_IDS=\n")
+            proc, log, forge, _, _ = run("32_verify.sh", "test")
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            assert "Skip" not in proc.stdout, proc.stdout
+            assert [call for call in forge if call[1] == "verify-contract"], log
+
         def verify_needs_api_key():
             fresh()
             proc, _, forge, _, _ = run("one_click_deploy.sh", "test", ETHERSCAN_API_KEY="")
@@ -447,9 +593,10 @@ def main():
 
         def weth_address_key_required():
             # WETH_ADDRESS 是必填模式开关：缺键不能被当成「本地部署」，否则漏配外部地址会静默部署假 WETH。
+            # 同时注入同名变量：键存在性只看文件，不看调用方环境。
             fresh(params={"network.params": "CHAIN_ID=97\nRPC_URL=http://invalid.local\n",
                           "dex.params": 'WETH_NAME="Test Wrapped ETH"\nWETH_SYMBOL=TestWETH\n'})
-            proc, log, forge, _, prompts = run("11_deploy_weth.sh", "test")
+            proc, log, forge, _, prompts = run("11_deploy_weth.sh", "test", WETH_ADDRESS=WETH)
             output = proc.stdout + proc.stderr
             assert proc.returncode != 0, "缺 WETH_ADDRESS 应失败: " + output
             assert "WETH_ADDRESS must be set" in output, output
@@ -457,7 +604,7 @@ def main():
             assert not weth_file.exists(), weth_file.read_text()
             # 复核侧同样拒绝缺键：补齐地址文件后仍应在模式判定处失败，且不发起任何链上调用。
             weth_file.write_text("WETH_ADDRESS=" + WETH + "\n")
-            proc, _, _, calls_made, _ = run("21_check_weth.sh", "test")
+            proc, _, _, calls_made, _ = run("21_check_weth.sh", "test", WETH_ADDRESS=WETH)
             output = proc.stdout + proc.stderr
             assert proc.returncode != 0, "复核同样应拒绝缺键: " + output
             assert "WETH_ADDRESS must be set" in output, output
@@ -510,6 +657,7 @@ def main():
         case("25 复核拒绝地址与 name/symbol 同时配置", weth_check_rejects_combination)
         case("26 外部地址文件与 dex.params 不一致即失败", weth_check_address_mismatch)
         case("27 缺 WETH_ADDRESS 即失败（不回落本地部署）", weth_address_key_required)
+        case("28 跳过必须显式声明：列表外一律验证", verify_requires_explicit_skip)
 
         failed = sum(1 for _, status, _ in results if status == "FAIL")
         for name, status, detail in results:

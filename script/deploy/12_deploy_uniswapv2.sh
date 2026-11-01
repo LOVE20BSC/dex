@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 步骤二（UniswapV2 模块）：部署 Factory 与 Router02，地址写入 addresses.uniswapv2.params。
-# 自包含——自行加载并校验部署所需文件，不依赖调用方预载环境。
-# WETH 地址取自 WETH 模块写出的 addresses.weth.params（先跑 11_deploy_weth.sh）；
-# WETH 是否有代码、Factory/Router 字节码哈希与部署后绑定由 DeployUniswapV2.s.sol 在广播前后校验。
-# 用法：script/deploy/12_deploy_uniswapv2.sh <network>
+# Step 2 (UniswapV2 module): deploy Factory and Router02 and write addresses.uniswapv2.params.
+# Self-contained: loads and validates every file it needs, without relying on a preloaded
+# caller environment.
+# The WETH address comes from addresses.weth.params written by the WETH module (run
+# 11_deploy_weth.sh first);
+# WETH code presence, the Factory/Router bytecode hashes and the post-deployment bindings are
+# checked by DeployUniswapV2.s.sol before and after broadcast.
+# Usage: script/deploy/12_deploy_uniswapv2.sh <network>
 
 network="${1:?usage: script/deploy/12_deploy_uniswapv2.sh <network>}"
 
@@ -13,7 +16,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
 
-# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+# Parameter file loader: 1e17 / 1_000_000 style literals are expanded to decimal on load (params.sh).
 source "$SCRIPT_DIR/params.sh"
 
 if [ ! -d "$NETWORK_DIR" ]; then
@@ -30,21 +33,28 @@ for config in network.params addresses.weth.params .account; do
     fi
 done
 
+# Parameters come from files only: clear every key the files define, so a value exported by the
+# caller cannot override a file value.
+params_unset_all "$NETWORK_DIR/network.params" "$NETWORK_DIR/addresses.weth.params"
+
 env_password="${KEYSTORE_PASSWORD:-}"
 params_load "$NETWORK_DIR/network.params"
 params_load "$NETWORK_DIR/addresses.weth.params"
-# .account 走普通 source：密码可能含 "#"，不能经过参数展开。
+# .account is plain-sourced: the password may contain "#" and must not go through parameter
+# expansion.
 set -a
 source "$NETWORK_DIR/.account"
 set +a
 
-# .account 里的空 KEYSTORE_PASSWORD 行不应清掉入口已导出的密码（避免重复弹窗）。
+# An empty KEYSTORE_PASSWORD line in .account must not clear a password exported by the entrypoint
+# (that would prompt a second time).
 [ -n "${KEYSTORE_PASSWORD:-}" ] || KEYSTORE_PASSWORD="$env_password"
 
 [ -n "${KEYSTORE_ACCOUNT:-}" ] && [ -n "${ACCOUNT_ADDRESS:-}" ] \
     || { echo "Error: KEYSTORE_ACCOUNT / ACCOUNT_ADDRESS is not set in $NETWORK_DIR/.account" >&2; exit 1; }
 
-# 实际链必须与配置一致；已设 KEYSTORE_PASSWORD 则不弹窗（非交互调用用）。
+# The actual chain must match the configuration; no prompt when KEYSTORE_PASSWORD is already set
+# (non-interactive use).
 actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL")"
 [ "$actual_chain_id" = "$CHAIN_ID" ] || { echo "Error: chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id" >&2; exit 1; }
 if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
@@ -58,7 +68,8 @@ APPLESCRIPT
 )"
 fi
 
-# 密码经临时文件传给 forge：--password 会把明文放进进程参数，同机其他用户可直接读到。
+# The password goes to forge through a temp file because --password would put the plaintext into the
+# process arguments, readable by every local user.
 PASSWORD_FILE=$(mktemp)
 ADDRESS_TMP="$NETWORK_DIR/.addresses.uniswapv2.params.$$"
 export ADDRESSES_FILE="script/network/$network/.addresses.uniswapv2.params.$$"
@@ -77,7 +88,7 @@ if ! forge script script/deploy/DeployUniswapV2.s.sol:DeployUniswapV2 --sig "run
     echo "Error: UniswapV2 deployment failed." >&2
     exit 1
 fi
-# 密码只在本次 forge 调用期间需要，广播结束立即删除。
+# The password is only needed for this forge call; delete it right after broadcast.
 rm -f "$PASSWORD_FILE"
 
 BROADCAST_FILE="$DEX_ROOT/broadcast/DeployUniswapV2.s.sol/$CHAIN_ID/run-latest.json"

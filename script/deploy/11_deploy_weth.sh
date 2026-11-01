@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 步骤一（WETH 模块）：就绪 WETH。自包含——自行加载并校验部署所需文件，不依赖调用方预载环境。
-# WETH_ADDRESS 是必填的模式开关（零地址=本地部署）：
-#   WETH_ADDRESS 非零：使用外部已部署 WETH，不部署、不需要 keystore；
-#   WETH_ADDRESS 为零地址：必须提供 WETH_NAME 与 WETH_SYMBOL，部署一个可配置名称/符号的 WETH。
-# 缺键或空值直接失败，不回落任一分支——漏配外部地址不能静默变成「部署一个本地 WETH」。
-# 部署期静态校验（互斥、有代码、decimals/deposit/withdraw、本地名称/符号）在
-# DeployWETH.s.sol 的广播前阶段完成；本步骤只做文件、链、账户与密码编排。
-# 地址写入 addresses.weth.params，供 UniswapV2 模块与校验步骤载入。
-# 用法：script/deploy/11_deploy_weth.sh <network>
+# Step 1 (WETH module): prepare WETH. Self-contained: loads and validates every file it needs,
+# without relying on a preloaded caller environment.
+# WETH_ADDRESS is a mandatory mode switch (zero address = deploy locally):
+#   non-zero WETH_ADDRESS: reuse an externally deployed WETH; nothing is deployed and no
+#   keystore is needed;
+#   zero WETH_ADDRESS: WETH_NAME and WETH_SYMBOL are required and a configurable WETH is
+#   deployed.
+# A missing key or an empty value fails immediately instead of falling back to either branch -
+# a forgotten external address must not silently become "deploy a local WETH".
+# Deployment-time static checks (mutual exclusion, code presence, decimals/deposit/withdraw, local
+# name/symbol) happen before broadcast in DeployWETH.s.sol; this step only orchestrates files,
+# chain, account and password.
+# Addresses are written to addresses.weth.params for the UniswapV2 module and the check steps.
+# Usage: script/deploy/11_deploy_weth.sh <network>
 
 network="${1:?usage: script/deploy/11_deploy_weth.sh <network>}"
 
@@ -17,7 +22,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 DEX_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 NETWORK_DIR="$DEX_ROOT/script/network/$network"
 
-# 参数文件载入器：1e17 / 1_000_000 这类写法在载入时展开为十进制（见 params.sh）。
+# Parameter file loader: 1e17 / 1_000_000 style literals are expanded to decimal on load (params.sh).
 source "$SCRIPT_DIR/params.sh"
 
 if [ ! -d "$NETWORK_DIR" ]; then
@@ -25,7 +30,8 @@ if [ ! -d "$NETWORK_DIR" ]; then
     exit 1
 fi
 
-# 上一次异常退出可能留下地址临时文件；只清理本模块的隐藏临时模式，不碰正式地址文件。
+# An abnormal previous exit may leave a hidden address temp file behind; only this module's temp
+# pattern is removed, never the real address file.
 rm -f "$NETWORK_DIR/.addresses.weth.params."*
 
 for config in network.params dex.params; do
@@ -35,8 +41,19 @@ for config in network.params dex.params; do
     fi
 done
 
-# 清掉可能从调用者环境继承来的取值，避免用别的网络的配置部署。
-unset WETH_ADDRESS WETH_NAME WETH_SYMBOL
+# Parameters come from files only: clear every key the files define, so a value exported by the
+# caller cannot override a file value. WETH_ADDRESS is the mode switch, and an empty value reads as
+# neither "external" nor "local", so it is asserted against the file itself, never against the
+# variable - an inherited value could satisfy that.
+params_require_values "$NETWORK_DIR/dex.params" WETH_ADDRESS || exit 1
+
+# WETH_NAME/WETH_SYMBOL only configure a local deployment and are read back through vm.envOr, so an
+# inherited value would survive a profile that omits them and trip DeployWETH's mutual-exclusion
+# check. params_unset_all only knows the keys the files still define, so clear these two explicitly
+# before loading; a value the file does define is loaded again below.
+unset WETH_NAME WETH_SYMBOL
+
+params_unset_all "$NETWORK_DIR/network.params" "$NETWORK_DIR/dex.params"
 
 params_load "$NETWORK_DIR/network.params"
 params_load "$NETWORK_DIR/dex.params"
@@ -49,11 +66,12 @@ if [ -z "$weth_address" ]; then
 fi
 if [ "$(printf '%s' "$weth_address" | tr '[:upper:]' '[:lower:]')" = "$zero_address" ]; then
     weth_mode=local
+    params_require_keys "$NETWORK_DIR/dex.params" WETH_NAME WETH_SYMBOL || exit 1
 else
     weth_mode=external
 fi
 
-# 实际链必须与配置一致。
+# The actual chain must match the configuration.
 actual_chain_id="$(cast chain-id --rpc-url "$RPC_URL")"
 [ "$actual_chain_id" = "$CHAIN_ID" ] || { echo "Error: chain ID mismatch: config=$CHAIN_ID rpc=$actual_chain_id" >&2; exit 1; }
 
@@ -64,7 +82,8 @@ echo "Network: $network (chain $CHAIN_ID)"
 cd "$DEX_ROOT"
 
 if [ "$weth_mode" = external ]; then
-    # 外部 WETH 模式：只读模拟运行 Solidity 脚本完成接口校验，不广播、不读取 keystore。
+    # External WETH mode: run the Solidity script read-only for interface checks; no broadcast, no
+    # keystore.
     trap 'rm -f "$ADDRESS_TMP"' EXIT
     echo "Using external WETH: $weth_address"
     if ! forge script script/deploy/DeployWETH.s.sol:DeployWETH --sig "run()" \
@@ -73,7 +92,7 @@ if [ "$weth_mode" = external ]; then
         exit 1
     fi
 else
-    # 本地部署模式：只有需要广播时才要求 .account 与密码。
+    # Local deployment mode: .account and a password are only needed when broadcasting.
     if [ ! -f "$NETWORK_DIR/.account" ]; then
         echo "Error: Missing required configuration: $NETWORK_DIR/.account" >&2
         exit 1
@@ -84,7 +103,8 @@ else
     source "$NETWORK_DIR/.account"
     set +a
 
-    # .account 里的空 KEYSTORE_PASSWORD 行不应清掉入口已导出的密码（避免重复弹窗）。
+    # An empty KEYSTORE_PASSWORD line in .account must not clear a password exported by the
+    # entrypoint (that would prompt a second time).
     [ -n "${KEYSTORE_PASSWORD:-}" ] || KEYSTORE_PASSWORD="$env_password"
 
     [ -n "${KEYSTORE_ACCOUNT:-}" ] && [ -n "${ACCOUNT_ADDRESS:-}" ] \
@@ -101,8 +121,9 @@ APPLESCRIPT
 )"
     fi
 
-    # 密码经临时文件传给 forge：--password 会把明文放进进程参数，同机其他用户可直接读到。
-    # trap 在写入密码之前安装，chmod/printf 失败也不会留下明文。
+    # The password goes to forge through a temp file because --password would put the plaintext into
+    # the process arguments, readable by every local user. The trap is installed before the password
+    # is written, so a failing chmod/printf leaks nothing.
     PASSWORD_FILE=$(mktemp)
     trap 'rm -f "$PASSWORD_FILE" "$ADDRESS_TMP"' EXIT
     chmod 600 "$PASSWORD_FILE"
