@@ -89,7 +89,15 @@ if [[ ! "$WETH_ADDRESS" =~ ^0x[0-9a-fA-F]{40}$ ]] || [[ "$WETH_ADDRESS" = 0x0000
     echo "Error: Missing or invalid WETH_ADDRESS in $NETWORK_DIR/addresses.weth.params" >&2
     exit 1
 fi
-: "${ETHERSCAN_API_KEY:?Set an Etherscan API key; source verification has not run.}"
+unset ETHERSCAN_API_KEY
+if [ ! -f "$NETWORK_DIR/.account" ]; then
+    echo "Error: Missing required configuration: $NETWORK_DIR/.account" >&2
+    exit 1
+fi
+set -a
+source "$NETWORK_DIR/.account"
+set +a
+: "${ETHERSCAN_API_KEY:?Set ETHERSCAN_API_KEY in .account; source verification has not run.}"
 
 if ! WETH_ARGS=$(cast abi-encode "constructor(string,string)" "$WETH_NAME" "$WETH_SYMBOL"); then
     echo "Error: Failed to encode WETH9Configurable constructor arguments" >&2

@@ -55,8 +55,14 @@ unset WETH_NAME WETH_SYMBOL
 
 params_unset_all "$NETWORK_DIR/network.params" "$NETWORK_DIR/dex.params"
 
+env_password="${KEYSTORE_PASSWORD:-}"
 params_load "$NETWORK_DIR/network.params"
 params_load "$NETWORK_DIR/dex.params"
+if [ -f "$NETWORK_DIR/.account" ]; then
+    set -a
+    source "$NETWORK_DIR/.account"
+    set +a
+fi
 
 weth_address="${WETH_ADDRESS:-}"
 zero_address=0x0000000000000000000000000000000000000000
@@ -97,11 +103,6 @@ else
         echo "Error: Missing required configuration: $NETWORK_DIR/.account" >&2
         exit 1
     fi
-
-    env_password="${KEYSTORE_PASSWORD:-}"
-    set -a
-    source "$NETWORK_DIR/.account"
-    set +a
 
     # An empty KEYSTORE_PASSWORD line in .account must not clear a password exported by the
     # entrypoint (that would prompt a second time).

@@ -28,6 +28,11 @@ params_unset_all "$network_dir/network.params" "$network_dir/addresses.weth.para
     "$network_dir/addresses.uniswapv2.params"
 
 params_load "$network_dir/network.params"
+if [ -f "$network_dir/.account" ]; then
+    set -a
+    source "$network_dir/.account"
+    set +a
+fi
 params_load "$network_dir/addresses.weth.params"
 params_load "$network_dir/addresses.uniswapv2.params"
 

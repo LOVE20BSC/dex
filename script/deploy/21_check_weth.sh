@@ -38,6 +38,11 @@ params_unset_all "$network_dir/network.params" "$network_dir/dex.params" \
     "$network_dir/addresses.weth.params"
 
 params_load "$network_dir/network.params"
+if [ -f "$network_dir/.account" ]; then
+    set -a
+    source "$network_dir/.account"
+    set +a
+fi
 params_load "$network_dir/dex.params"
 configured_weth_address="${WETH_ADDRESS:-}"
 configured_weth_name="${WETH_NAME:-}"

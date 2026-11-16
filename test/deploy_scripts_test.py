@@ -288,7 +288,7 @@ def main():
             for name, text in files.items():
                 (net / name).write_text(text)
             if account:
-                (net / ".account").write_text("KEYSTORE_ACCOUNT=dev1\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\n")
+                (net / ".account").write_text("KEYSTORE_ACCOUNT=dev1\nACCOUNT_ADDRESS=0x" + "f5" * 20 + "\nETHERSCAN_API_KEY=test-key\n")
             elif (net / ".account").exists():
                 (net / ".account").unlink()
             weth_file.unlink(missing_ok=True)
@@ -510,7 +510,7 @@ def main():
             # .account 配了非空 KEYSTORE_PASSWORD：入口直接沿用，不弹窗。
             fresh()
             (net / ".account").write_text("KEYSTORE_ACCOUNT=dev1\nACCOUNT_ADDRESS=0x" + "f5" * 20
-                                          + "\nKEYSTORE_PASSWORD=preset-secret\n")
+                                          + "\nKEYSTORE_PASSWORD=preset-secret\nETHERSCAN_API_KEY=test-key\n")
             proc, _, _, _, prompts = run("one_click_deploy.sh", "test")
             assert proc.returncode == 0, f"rc={proc.returncode} " + proc.stdout + proc.stderr
             assert not prompts, ("osascript called", prompts)
@@ -567,9 +567,20 @@ def main():
 
         def verify_needs_api_key():
             fresh()
-            proc, _, forge, _, _ = run("one_click_deploy.sh", "test", ETHERSCAN_API_KEY="")
+            (net / ".account").write_text((net / ".account").read_text().replace("ETHERSCAN_API_KEY=test-key\n", ""))
+            proc, _, forge, _, _ = run("one_click_deploy.sh", "test")
             assert proc.returncode != 0, "缺少 API Key 应失败: " + proc.stdout
             assert not any(call[1] == "verify-contract" for call in forge), forge
+
+        def private_rpc_all_steps():
+            fresh()
+            with (net / ".account").open("a") as account:
+                account.write("RPC_URL=http://private.invalid\n")
+            proc, log, _, _, _ = run("one_click_deploy.sh", "test")
+            assert proc.returncode == 0, proc.stdout + proc.stderr
+            rpc_calls = [call for call in log if "--rpc-url" in call]
+            assert rpc_calls, log
+            assert all(call[call.index("--rpc-url") + 1] == "http://private.invalid" for call in rpc_calls), rpc_calls
 
         def external_weth_needs_no_account():
             fresh(account=False)
@@ -658,6 +669,7 @@ def main():
         case("26 外部地址文件与 dex.params 不一致即失败", weth_check_address_mismatch)
         case("27 缺 WETH_ADDRESS 即失败（不回落本地部署）", weth_address_key_required)
         case("28 跳过必须显式声明：列表外一律验证", verify_requires_explicit_skip)
+        case("29 各步骤统一读取 .account 中的私有 RPC", private_rpc_all_steps)
 
         failed = sum(1 for _, status, _ in results if status == "FAIL")
         for name, status, detail in results:

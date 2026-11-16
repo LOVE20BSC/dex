@@ -111,15 +111,15 @@ script/deploy/one_click_deploy.sh anvil31337_dev
 将来新增合约时，为它写一套自己的步骤脚本，再建一份入口脚本把它接上；已有步骤与入口都不用改——各步骤的部署输入互不要求存在。任一一步都可脱离入口单独执行（注意模块顺序：UniswapV2 模块要求 WETH 模块先就绪）：
 
 ```bash
-script/deploy/11_deploy_weth.sh anvil31337_dev       # 就绪 WETH（外部地址模式不读 .account；本地部署模式需要）
+script/deploy/11_deploy_weth.sh anvil31337_dev       # 就绪 WETH（外部地址模式在 .account 存在时读取以支持私有 RPC；本地部署模式必需）
 script/deploy/12_deploy_uniswapv2.sh anvil31337_dev  # 部署 Factory 与 Router02
-script/deploy/21_check_weth.sh anvil31337_dev        # 独立复核，只读参数与地址文件，可随时重跑
+script/deploy/21_check_weth.sh anvil31337_dev        # 独立复核，不广播交易，可随时重跑
 script/deploy/22_check_uniswapv2.sh anvil31337_dev
 script/deploy/31_verify_weth.sh anvil31337_dev       # 本地 WETH 的开源验证；外部 WETH 跳过
-script/deploy/32_verify.sh anvil31337_dev             # 开源验证，需 network.params 的 ETHERSCAN_API_KEY
+script/deploy/32_verify.sh anvil31337_dev             # 开源验证，需 .account 的 ETHERSCAN_API_KEY
 ```
 
-两个复核步骤各自把不符项全部跑完再汇总，不中途退出，便于一次性看到全部不符项；任一不符以非零退出。它们不读 `.account`、不需要密码。改动 `script/deploy/` 下的脚本后，用 `python3 test/deploy_scripts_test.py` 做一次回归（见「构建与测试」）。
+两个复核步骤各自把不符项全部跑完再汇总，不中途退出，便于一次性看到全部不符项；任一不符以非零退出。它们在 `.account` 存在时读取以支持私有 RPC，不需要密码。改动 `script/deploy/` 下的脚本后，用 `python3 test/deploy_scripts_test.py` 做一次回归（见「构建与测试」）。
 
 `dex.params` 的 `WETH_ADDRESS` 是**必填的模式开关**，三参数严格二选一，不能同时有值，也不能只给一个名称/符号：
 
@@ -140,3 +140,5 @@ LOVE20 的 Launch 与 Stake 配置同一个 Factory，Stake 的 Router 配置为
 [术语表](CONTEXT.md) · [永久关闭抽成](docs/adr/0001-disable-protocol-fee.md) · [合约范围](docs/adr/0002-preserve-complete-selected-contracts.md) · [上游溯源](docs/adr/0003-record-upstream-baseline.md)
 
 上游许可证原样保留于各子模块：[v2-core](lib/v2-core/LICENSE)、[v2-periphery](lib/v2-periphery/LICENSE)、[solidity-lib](lib/solidity-lib/LICENSE)。本项目新增脚本和测试采用 GPL-3.0-or-later。
+
+公开参数和地址会随仓库发布到 GitHub Pages。`network.params` 的 `RPC_URL` 只填公开节点；验证 API Key、密码和带凭据的私有 RPC 统一写入已忽略的 `.account`，其中 `RPC_URL` 可覆盖公开节点。部署步骤必需 `.account`；只读校验在它存在时读取；验证步骤仅在实际提交验证时要求其中的 `ETHERSCAN_API_KEY`，不接受环境变量补位。

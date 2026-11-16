@@ -4,4 +4,5 @@
 /broadcast/
 .env
 .DS_Store
-/script/network/*/.account
+.account
+/_site/

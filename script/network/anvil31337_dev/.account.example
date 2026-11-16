@@ -1,3 +1,4 @@
 # Copy to .account and fill in a Foundry keystore account.
 KEYSTORE_ACCOUNT=
 ACCOUNT_ADDRESS=
+ETHERSCAN_API_KEY=
